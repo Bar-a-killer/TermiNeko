@@ -6,11 +6,10 @@ BIN    := target/release/neko
 PREFIX ?= $(HOME)/.local
 VENV   := .venv
 PY     := $(VENV)/bin/python
-
-.DEFAULT_GOAL := help
 CORE   := $(VENV)/bin/neko-core
 
-.PHONY: help build shell cat line install uninstall api test check venv clean
+.DEFAULT_GOAL := help
+.PHONY: help build shell cat line install uninstall api test fmt check venv clean
 
 help: ## 列出所有指令
 	@echo "make <指令>"
@@ -54,9 +53,19 @@ api: $(CORE) ## 啟動 HTTP API（http://127.0.0.1:8000/docs）；PORT=9000 換�
 test: $(CORE) ## 跑 Python 測試
 	$(VENV)/bin/pytest -q
 
-check: $(BIN) ## 檢查 Rust（clippy）和 Claude Code 外掛
-	cargo clippy --release -q
+fmt: $(CORE) ## 整理格式（Rust：rustfmt；Python：ruff）
+	cargo fmt
+	$(VENV)/bin/ruff format neko_api tests
+	$(VENV)/bin/ruff check --fix neko_api tests
+
+check: $(BIN) $(CORE) ## 全部檢查一次：格式、lint、測試、Claude Code 外掛
+	cargo fmt --check
+	cargo clippy --release -q -- -D warnings
+	$(VENV)/bin/ruff format --check neko_api tests
+	$(VENV)/bin/ruff check neko_api tests
+	$(VENV)/bin/pytest -q
 	claude plugin validate mod
 
-clean: ## 刪掉編譯產物
+clean: ## 刪掉編譯產物和 Python 快取（.venv 留著）
 	cargo clean
+	rm -rf .pytest_cache .ruff_cache neko_api/__pycache__ tests/__pycache__

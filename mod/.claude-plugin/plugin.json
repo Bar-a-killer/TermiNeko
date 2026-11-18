@@ -1,1 +1,7 @@
-{ "name": "neko", "version": "0.1.0", "license": "MIT","description": "輸入框上方的立體小貓：自己閒晃，跟著 Claude 的工作反應（看你打字、陪改檔、等太久睡著、做完叫你），/neko 互動", "types": "./types/index.d.ts" }
+{
+  "name": "neko",
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "輸入框上方的立體小貓：自己閒晃，跟著 Claude 的工作反應（看你打字、陪改檔、等太久睡著、做完叫你）；/neko 乾糧、濕食、零食餵食，/neko 摸摸、丟球…互動",
+  "types": "./types/index.d.ts"
+}

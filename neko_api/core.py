@@ -11,9 +11,9 @@ import time
 from typing import Any
 
 from .model import FACTOR, FOODS, IDEAL, Cat, Mood, need
+from .store import Store
 
 BODY = ["", "過瘦", "過瘦", "偏瘦", "理想", "理想", "過重", "過重", "肥胖", "肥胖"]  # BCS 1–9 的說法
-from .store import Store
 
 
 class OpError(ValueError):
@@ -111,7 +111,11 @@ def run(req: dict, store: Store | None = None, now: float | None = None) -> dict
         if op == "log":
             limit = int(_num(req, "limit", 20, hi=60))
             with st.edit(now) as c:
-                return {"ok": True, "log": [{"time": a, "message": b} for a, b in c.log[-limit:]], "cat": status(c, now)}
+                return {
+                    "ok": True,
+                    "log": [{"time": a, "message": b} for a, b in c.log[-limit:]],
+                    "cat": status(c, now),
+                }
         if op == "line":
             with st.edit(now) as c:
                 return {"ok": True, "message": line(c), "cat": status(c, now)}

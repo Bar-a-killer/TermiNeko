@@ -5,7 +5,7 @@
 
 mod core;
 mod pix;
-
+mod shell;
 
 use std::path::PathBuf;
 
@@ -30,7 +30,10 @@ fn main() {
         "pose" => {
             let a: Vec<String> = std::env::args().collect();
             let g = |i: usize, d: f64| a.get(i).and_then(|s| s.parse().ok()).unwrap_or(d);
-            print!("{}", pix::pose_dump(a.get(2).map(|s| s.as_str()).unwrap_or("sit"), g(3, 1.0), g(4, 1.0), g(5, 0.0), g(6, 0.0)));
+            print!(
+                "{}",
+                pix::pose_dump(a.get(2).map(|s| s.as_str()).unwrap_or("sit"), g(3, 1.0), g(4, 1.0), g(5, 0.0), g(6, 0.0))
+            );
         }
         // 一直輸出畫面給 Claude Code 的 mod（每格後面接 0x1E），stdout 關掉就結束
         "stream" => {
@@ -50,7 +53,12 @@ fn main() {
                 let (f, busy) = pix::raster_busy(cols, k, &name, &pane_path());
                 // 畫面沒變就不送；但至少每秒送一次，讓 mod 知道還活著
                 if f != last || since_sent >= 1.0 {
-                    if out.write_all(f.as_bytes()).and_then(|_| out.write_all(b"\x1e")).and_then(|_| out.flush()).is_err() {
+                    if out
+                        .write_all(f.as_bytes())
+                        .and_then(|_| out.write_all(b"\x1e"))
+                        .and_then(|_| out.flush())
+                        .is_err()
+                    {
                         break;
                     }
                     last = f;
@@ -72,7 +80,10 @@ fn main() {
                 "raster" => print!("{}", pix::raster(num(2), kf(3), &name, &pane_path())),
                 "dump" => print!("{}", pix::dump(num(2), kf(3), &pane_path())),
                 "trace" => print!("{}", pix::trace(num(2))),
-                _ => println!("{}", pix::act(args.get(2).map(|s| s.as_str()).unwrap_or(""), num(3), kf(4), &name, &pane_path())),
+                _ => println!(
+                    "{}",
+                    pix::act(args.get(2).map(|s| s.as_str()).unwrap_or(""), num(3), kf(4), &name, &pane_path())
+                ),
             }
         }
         "" => {
@@ -96,7 +107,7 @@ fn main() {
         // 把 shell 包起來，貓住在終端機的空白處；exit 離開
         "shell" => {
             let name = crate::core::name();
-            match pix::shell(&name, &pane_path()) {
+            match shell::run(&name, &pane_path()) {
                 Ok(code) => std::process::exit(code),
                 Err(e) => {
                     let _ = crossterm::terminal::disable_raw_mode();

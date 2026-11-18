@@ -103,6 +103,15 @@ const live = {
   typingAt: 0,
 }
 
+// 貓的反應出錯不能擋到 Claude（送出訊息、跑工具）：錯誤吞掉，貓只是沒反應
+async function quietly(f: () => unknown): Promise<void> {
+  try {
+    await f()
+  } catch {
+    // 貓沒反應而已
+  }
+}
+
 async function setActivity($: Engine, text: string) {
   await update($, activity, () => text).catch(() => {})
 }
@@ -265,10 +274,12 @@ export const register: Register = on => {
   // 你送出訊息：抬頭歪頭聽（斜線指令不算，免得蓋掉 /neko 的動作）
   on('prompt.submit', async ($, e, next) => {
     if (!e.text.trimStart().startsWith('/')) {
-      live.typingAt = 0
-      live.lastReactAt = 0
-      react($, 'look', 0)
-      await setActivity($, '聽你說')
+      await quietly(async () => {
+        live.typingAt = 0
+        live.lastReactAt = 0
+        react($, 'look', 0)
+        await setActivity($, '聽你說')
+      })
     }
 
     return next(e)
@@ -307,39 +318,45 @@ export const register: Register = on => {
     if (e.agentId !== undefined) {
       return next(e)
     }
-    if (!live.hasNapped) {
-      await setActivity($, describe(e))
-    }
-    if (e.tool === 'Bash') {
-      live.bashSince = Date.now()
-    }
+    await quietly(async () => {
+      if (!live.hasNapped) {
+        await setActivity($, describe(e))
+      }
+      if (e.tool === 'Bash') {
+        live.bashSince = Date.now()
+      }
+    })
     let ran: Awaited<ReturnType<typeof next>>
     try {
       ran = await next(e)
     } finally {
       if (e.tool === 'Bash') {
-        live.bashSince = 0
-        // 指令跑完：因為等指令睡著的就醒來；這一輪已經跑很久的話照樣睡到這一輪結束
-        if (live.bashNapped) {
-          live.bashNapped = false
-          const turnLong = live.turnStartedAt > 0 && Date.now() - live.turnStartedAt > NAP_AFTER_MS
-          if (!turnLong) {
-            live.hasNapped = false
-            void act($, 'wake', live.width).catch(() => {})
-            await setActivity($, '').catch(() => {})
+        await quietly(async () => {
+          live.bashSince = 0
+          // 指令跑完：因為等指令睡著的就醒來；這一輪已經跑很久的話照樣睡到這一輪結束
+          if (live.bashNapped) {
+            live.bashNapped = false
+            const turnLong = live.turnStartedAt > 0 && Date.now() - live.turnStartedAt > NAP_AFTER_MS
+            if (!turnLong) {
+              live.hasNapped = false
+              void act($, 'wake', live.width).catch(() => {})
+              await setActivity($, '')
+            }
           }
-        }
+        })
       }
     }
     const isOk = ran.deny === undefined && ran.isError !== true
-    if (!isOk && e.tool === 'Bash' && !live.hasNapped && Date.now() - live.lastStartleAt > 10_000) {
-      live.lastStartleAt = Date.now()
-      live.lastReactAt = Date.now()
-      void act($, 'jump', live.width).catch(() => {})
-      await setActivity($, '被失敗的指令嚇一跳')
-    } else if (isOk && ['Edit', 'Write', 'NotebookEdit'].includes(e.tool)) {
-      react($, 'paw', 8000)
-    }
+    await quietly(async () => {
+      if (!isOk && e.tool === 'Bash' && !live.hasNapped && Date.now() - live.lastStartleAt > 10_000) {
+        live.lastStartleAt = Date.now()
+        live.lastReactAt = Date.now()
+        void act($, 'jump', live.width).catch(() => {})
+        await setActivity($, '被失敗的指令嚇一跳')
+      } else if (isOk && ['Edit', 'Write', 'NotebookEdit'].includes(e.tool)) {
+        react($, 'paw', 8000)
+      }
+    })
 
     return ran
   })

@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-import time
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
@@ -187,7 +186,9 @@ def create_app(store: Store | None = None) -> FastAPI:
 
     @app.get("/foods", response_model=list[FoodInfo], tags=["info"], summary="食物種類")
     def foods():
-        return [FoodInfo(key=f.key, label=f.label, kcal_per_kg=f.kcal_per_kg, default_g=f.default_g) for f in FOODS.values()]
+        return [
+            FoodInfo(key=f.key, label=f.label, kcal_per_kg=f.kcal_per_kg, default_g=f.default_g) for f in FOODS.values()
+        ]
 
     @app.get("/nutrition", response_model=Nutrition, tags=["info"], summary="某個體重一天該吃多少")
     def nutrition(weight: float = Query(..., gt=0.5, le=15, description="體重（kg）")):
@@ -201,7 +202,9 @@ def create_app(store: Store | None = None) -> FastAPI:
             wet_g=round(nd / FOODS["wet"].kcal_per_kg * 1000, 1),
         )
 
-    @app.post("/simulate", response_model=list[SimPoint], tags=["info"], summary="模擬固定餵法下的體重變化（不影響存檔）")
+    @app.post(
+        "/simulate", response_model=list[SimPoint], tags=["info"], summary="模擬固定餵法下的體重變化（不影響存檔）"
+    )
     def sim(req: SimRequest):
         return simulate(req.start_weight, req.daily_kcal, req.days, req.meals_per_day, req.jitter, req.seed)
 
