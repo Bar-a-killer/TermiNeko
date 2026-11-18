@@ -2,14 +2,15 @@
 
 一隻用真實營養學規則養的貓。時間是真的在走：你不餵牠，牠會餓、會瘦；餵太多，牠會胖。
 
-這個專案有兩個部分：
+這個專案有兩個部分，分工很清楚：
 
 | 部分 | 語言 | 做什麼 |
 |---|---|---|
-| `src/` | Rust | 終端機裡的貓：全螢幕動畫、互動、`tmux` 狀態列 |
-| `neko_api/` | Python | **HTTP API**：用 REST 查詢、餵食、互動，還有體重模擬 |
+| `neko_api/` | Python | **所有計算和紀錄**：營養模型、心情、體重、紀錄、存檔（`state.json`），還有 HTTP API 和體重模擬 |
+| `src/` | Rust | **只有畫面和終端機互動**：像素貓動畫、`neko shell`、Claude Code 外掛的畫面 |
 
-兩邊讀寫**同一個 `state.json`**，所以用 API 餵的貓，在終端機裡也是飽的。
+Rust 不自己算任何營養：它透過 `neko-core` 指令問 Python 貓的狀態。餵食、摸摸這些動作用 `neko-core` 或 HTTP API。
+所以 API、終端機、Claude Code 外掛看到的永遠是同一隻貓，所有寫入都經過同一個檔案鎖。
 
 ---
 
@@ -106,6 +107,20 @@ $ curl -s -X POST localhost:8000/simulate -H 'Content-Type: application/json' \
 
 `mood` 可能是：`starving`、`hungry`、`full`、`sleep`、`bored`、`happy`、`ok`。
 
+### neko-core（給終端機版用的指令）
+
+Rust 終端機版就是靠這個指令跟 Python 講話；你也可以自己用：
+
+```bash
+neko-core status          # 狀態（JSON）
+neko-core line            # (^.^) 芝麻 3.99kg 肚子17%
+neko-core feed wet 30     # 餵 30 克濕食
+neko-core pet | play      # 摸摸、丟球
+neko-core log 5           # 最近 5 筆紀錄
+```
+
+完整的操作列表在 `neko_api/core.py`。
+
 ### 在 Python 裡直接用
 
 ```python
@@ -130,19 +145,16 @@ pytest
 
 ## Rust 終端機版
 
-需要 [Rust](https://rustup.rs/)。
+需要 [Rust](https://rustup.rs/)，以及上面裝好的 Python 核心（`make venv`）。終端機版會依序找：環境變數 `NEKO_CORE` → 這個 repo 的 `.venv/bin/neko-core` → `PATH` 上的 `neko-core`。
 
 ```bash
 cargo build --release
 ./target/release/neko          # 全螢幕的貓（按 q 離開）
-./target/release/neko room     # 有熱量和體重的房間版
 ./target/release/neko shell    # 開一個 shell，貓住在終端機的空白處（exit 離開）
 ./target/release/neko line     # 印一行狀態，例如：(^.^) 芝麻 3.99kg 肚子17%
 ```
 
 `neko shell` 會把你的 shell 包起來，終端機照常使用，貓只出現在現在空白、而且平常很少被寫到的地方（多半是右下角）。輸出一碰到貓那塊，那塊立刻還給你，貓換到別的空地；vim、less 這類全螢幕程式執行時貓會先躲起來。
-
-房間版按鍵：`f` 乾糧、`w` 濕食、`t` 零食、`p` 丟球、`h`/空白 摸摸、`n` 改名、`.` 快轉 1 小時、`R R` 重新領養、`q` 離開。
 
 `mod/` 是 Claude Code 的外掛，讓貓在 Claude 工作時陪在旁邊、看它做什麼。先 `cargo build --release`，再把 `mod/` 加進 Claude Code 的外掛資料夾（例如設定 `CLAUDE_CODE_PLUGIN_DIRS=<repo>/mod`）。外掛預設執行 `<repo>/target/release/neko`；執行檔放在別的地方的話，設定環境變數 `NEKO_BIN` 指過去。
 
@@ -152,13 +164,16 @@ cargo build --release
 
 ```
 .
-├── src/                 Rust：終端機版
-│   ├── main.rs          模型、房間、指令列
-│   └── pix.rs           像素畫的貓
-├── neko_api/            Python：API
-│   ├── model.py         營養模型（和 Rust 版同一套規則）+ 模擬
+├── neko_api/            Python：所有計算和紀錄
+│   ├── model.py         營養模型、心情、吃飯的規則 + 模擬
 │   ├── store.py         讀寫 state.json（原子寫入 + 檔案鎖）
+│   ├── core.py          每個操作（餵食、吃一口、摸摸…）和狀態格式，neko-core 和 API 共用
+│   ├── cli.py           neko-core 指令（單次 / 常駐）
 │   └── server.py        FastAPI 路由
+├── src/                 Rust：只有畫面和終端機互動
+│   ├── main.rs          指令列
+│   ├── core.rs          呼叫 neko-core
+│   └── pix.rs           像素畫的貓、neko shell
 ├── tests/               pytest
 ├── mod/                 Claude Code 外掛
 ├── Cargo.toml
@@ -167,7 +182,7 @@ cargo build --release
 
 ## 注意事項
 
-- API 和 `neko room` **同時開著**時，房間版會在自己存檔時蓋掉 API 的修改（Rust 版沒有檔案鎖）。建議同一時間只用其中一邊改。
+- API、neko-core、終端機版可以同時用：所有修改都經過 Python 的檔案鎖，不會互相蓋掉。
 - API 預設只聽 `127.0.0.1`，而且沒有驗證；要對外開放的話請自己加上驗證。
 
 ## 授權

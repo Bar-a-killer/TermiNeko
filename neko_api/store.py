@@ -1,4 +1,4 @@
-"""讀寫 state.json；和 Rust 版共用同一個檔案。"""
+"""讀寫 state.json（原子寫入 + 檔案鎖）。API 和 neko-core 都經過這裡。"""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from .model import Cat
 
 
 def default_path() -> Path:
-    """和 Rust 版相同：NEKO_STATE，不然就是 ~/neko/state.json。"""
+    """NEKO_STATE，不然就是 ~/neko/state.json。"""
     p = os.environ.get("NEKO_STATE")
     if p:
         return Path(p)
@@ -48,7 +48,7 @@ class Store:
             fcntl.flock(lock, fcntl.LOCK_EX)
             cat = self.load(n)
             cat.tick(n)
-            # 上次在房間裡碗沒吃完，牠在你不在的時候吃掉了（和 Rust 版開房間時相同）
+            # 碗裡有剩（舊版存檔），牠在你不在的時候吃掉了
             cat.finish_bowl(n)
             yield cat
             self.save(cat)

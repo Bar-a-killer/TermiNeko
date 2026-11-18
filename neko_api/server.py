@@ -15,7 +15,7 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from . import __version__
+from . import __version__, core
 from .model import FOODS, IDEAL, Cat, need, simulate
 from .store import Store
 
@@ -36,6 +36,11 @@ class CatStatus(BaseModel):
     fed_today_kcal: float
     age_days: float = Field(description="領養幾天了")
     bowl_g: float
+    body: str = Field(description="體態：過瘦 / 偏瘦 / 理想 / 過重 / 肥胖")
+    belly_hours: float = Field(description="肚子裡的熱量還能撐幾小時")
+    need_dry_g: float = Field(description="一天的需求換算成乾糧幾克")
+    need_formula: str = Field(description="每日需求的算式")
+    last_log: str = Field(description="最新一筆紀錄")
 
 
 class ActionResult(BaseModel):
@@ -101,23 +106,7 @@ class Nutrition(BaseModel):
 
 
 def status(c: Cat, now: float | None = None) -> CatStatus:
-    n = time.time() if now is None else now
-    nd = need(c.w)
-    return CatStatus(
-        name=c.name,
-        weight_kg=round(c.w, 3),
-        ideal_kg=IDEAL,
-        bcs=c.bcs(),
-        need_kcal=round(nd, 1),
-        belly_kcal=round(c.belly, 1),
-        belly_pct=round(c.belly / nd * 100, 1),
-        joy=round(c.joy, 1),
-        mood=c.mood().value,
-        face=c.face(),
-        fed_today_kcal=round(c.fed_today, 1),
-        age_days=round((n - c.born) / 86400, 2),
-        bowl_g=round(c.bowl_g, 1),
-    )
+    return CatStatus(**core.status(c, now))
 
 
 def create_app(store: Store | None = None) -> FastAPI:
@@ -125,7 +114,7 @@ def create_app(store: Store | None = None) -> FastAPI:
     app = FastAPI(
         title="neko API",
         version=__version__,
-        description="住在終端機裡的貓。和 Rust 版共用 state.json，時間是真的在走。",
+        description="住在終端機裡的貓。和終端機版共用 state.json，時間是真的在走。",
     )
 
     @app.get("/cat", response_model=CatStatus, tags=["cat"], summary="貓現在的狀態")
@@ -178,10 +167,8 @@ def create_app(store: Store | None = None) -> FastAPI:
     @app.post("/cat/advance", response_model=ActionResult, tags=["debug"], summary="快轉時間（測試用）")
     def advance(req: AdvanceRequest):
         with st.edit() as c:
-            dt = req.hours * 3600
-            c.pass_time(dt)
-            c.born -= dt  # 和 Rust 版的 '.' 鍵一樣，年齡也跟著加
-            return ActionResult(message=f"快轉 {req.hours:g} 小時。", cat=status(c))
+            msg = c.advance(req.hours)
+            return ActionResult(message=msg, cat=status(c))
 
     @app.post(
         "/cat/adopt",

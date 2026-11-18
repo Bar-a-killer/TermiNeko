@@ -1,4 +1,4 @@
-"""貓的模型：和 Rust 版（src/main.rs 的 `Cat`）同一套規則。
+"""貓的模型：營養、心情、紀錄的所有計算都在這裡（Rust 只負責畫面，透過 neko-core 呼叫這裡）。
 
 每日需求 = 70 × 體重^0.75 × 1.2（結紮成貓），體重每變化 1 kg ≈ 7000 kcal。
 所有跟時間有關的函式都吃一個 `now`（Unix 秒），方便測試和模擬。
@@ -16,7 +16,7 @@ KCAL_PER_KG = 7000.0  # 體重每變化 1 kg 約等於 7000 kcal
 FACTOR = 1.2  # 結紮成貓
 IDEAL = 4.0  # 理想體重（kg）
 FLOOR = IDEAL * 0.72  # 體重下限：太久沒回來，鄰居會幫忙餵
-LOG_LIMIT = 60  # 存檔時只保留最近幾筆紀錄（和 Rust 版相同）
+LOG_LIMIT = 60  # 存檔時只保留最近幾筆紀錄
 NAMES = ["麻糬", "芝麻", "布丁", "饅頭", "年糕", "豆花", "肉鬆"]
 
 
@@ -38,7 +38,7 @@ class Food:
     key: str
     label: str
     kcal_per_kg: float
-    default_g: float  # 按一下加多少克（和 Rust 版按鍵相同）
+    default_g: float  # 沒指定份量時給多少克
     joy: float = 0.0  # 給的時候額外加多少心情
 
 
@@ -83,6 +83,10 @@ class Cat:
     log: list[tuple[str, str]] = field(default_factory=list)
     bowl_g: float = 0.0
     bowl_kcal: float = 0.0
+    # 正在吃的這一餐（分幾口吃時，吃完碗才結算成一筆紀錄）
+    meal_g: float = 0.0
+    meal_kcal: float = 0.0
+    meal_extra: float = 0.0
 
     # ───────── 建立與存讀 ─────────
 
@@ -104,7 +108,7 @@ class Cat:
 
     @classmethod
     def from_dict(cls, d: dict, now: float | None = None) -> Cat:
-        """讀 state.json 的內容；格式壞掉或沒有體重就重新領養（和 Rust 版相同）。"""
+        """讀 state.json 的內容；格式壞掉或沒有體重就重新領養。"""
         n = time.time() if now is None else now
         w = d.get("w") if isinstance(d, dict) else None
         if not isinstance(w, (int, float)) or w <= 0:
@@ -136,6 +140,9 @@ class Cat:
             log=log,
             bowl_g=max(f("bowl_g", 0.0), 0.0),
             bowl_kcal=max(f("bowl_kcal", 0.0), 0.0),
+            meal_g=max(f("meal_g", 0.0), 0.0),
+            meal_kcal=max(f("meal_kcal", 0.0), 0.0),
+            meal_extra=max(f("meal_extra", 0.0), 0.0),
         )
 
     def to_dict(self) -> dict:
@@ -150,6 +157,9 @@ class Cat:
             "day": self.day,
             "bowl_g": self.bowl_g,
             "bowl_kcal": self.bowl_kcal,
+            "meal_g": self.meal_g,
+            "meal_kcal": self.meal_kcal,
+            "meal_extra": self.meal_extra,
             "log": [list(e) for e in self.log[-LOG_LIMIT:]],
         }
 
@@ -194,13 +204,37 @@ class Cat:
             return extra
         return 0.0
 
-    def finish_bowl(self, now: float | None = None) -> str | None:
-        """把碗裡的東西吃完，寫一筆紀錄，回傳訊息；碗是空的就回傳 None。"""
+    def put_in_bowl(self, food: Food, grams: float) -> str:
+        """放食物進碗裡（還沒吃）。零食會讓牠馬上開心一點。"""
+        kcal = grams * food.kcal_per_kg / 1000.0
+        self.joy = min(self.joy + food.joy, 100.0)
+        self.bowl_g += grams
+        self.bowl_kcal += kcal
+        return f"碗裡加了 {grams:.0f} 克{food.label}（{kcal:.0f} kcal）"
+
+    def eat_from_bowl(self, grams: float, now: float | None = None) -> str | None:
+        """從碗裡吃 grams 克（可以分幾口吃）。
+
+        吃到碗空的那一口結算這一餐、寫一筆紀錄，回傳訊息；還沒吃完或碗是空的回傳 None。
+        """
         if self.bowl_g <= 0.0 and self.bowl_kcal <= 0.0:
             return None
-        g, k = self.bowl_g, self.bowl_kcal
-        self.bowl_g = self.bowl_kcal = 0.0
-        extra = self.eat(k)
+        g = min(max(grams, 0.0), self.bowl_g)
+        k = self.bowl_kcal * g / self.bowl_g if self.bowl_g > 0.0 else self.bowl_kcal
+        self.bowl_g -= g
+        self.bowl_kcal -= k
+        if self.bowl_g < 0.05:
+            # 碗底剩的一點點一起吃掉
+            g += self.bowl_g
+            k += self.bowl_kcal
+            self.bowl_g = self.bowl_kcal = 0.0
+        self.meal_extra += self.eat(k)
+        self.meal_g += g
+        self.meal_kcal += k
+        if self.bowl_g > 0.0:
+            return None
+        g, k, extra = self.meal_g, self.meal_kcal, self.meal_extra
+        self.meal_g = self.meal_kcal = self.meal_extra = 0.0
         msg = f"吃了 {g:.0f} 克（{k:.0f} kcal）"
         if extra > 0.0:
             msg += f"，吃太撐，多的 {extra:.0f} kcal 變成了 {extra / KCAL_PER_KG * 1000:.0f} 克體重"
@@ -210,11 +244,13 @@ class Cat:
         self.note(msg, now)
         return f"{self.name} {msg}"
 
+    def finish_bowl(self, now: float | None = None) -> str | None:
+        """把碗裡的東西一次吃完，寫一筆紀錄，回傳訊息；碗是空的就回傳 None。"""
+        return self.eat_from_bowl(self.bowl_g, now)
+
     def feed(self, food: Food, grams: float, now: float | None = None) -> str:
         """放食物進碗裡，貓馬上吃完。"""
-        self.joy = min(self.joy + food.joy, 100.0)
-        self.bowl_g += grams
-        self.bowl_kcal += grams * food.kcal_per_kg / 1000.0
+        self.put_in_bowl(food, grams)
         return self.finish_bowl(now) or ""
 
     def pet(self) -> str:
@@ -229,6 +265,13 @@ class Cat:
         self.belly = max(self.belly - 6.0, 0.0)
         self.note("玩了球", now)
         return f"{self.name} 抓到球了！（消耗 6 kcal）"
+
+    def advance(self, hours: float, now: float | None = None) -> str:
+        """快轉時間（測試用）：年齡也跟著加。"""
+        dt = hours * 3600.0
+        self.pass_time(dt, now)
+        self.born -= dt
+        return f"快轉 {hours:g} 小時。"
 
     def rename(self, name: str, now: float | None = None) -> str:
         n = name.strip()[:12]
