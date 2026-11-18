@@ -11,12 +11,9 @@ use std::path::PathBuf;
 
 // ───────────────────────── Claude Code 用的貓（畫法在 pix.rs） ─────────────────────────
 
-/// 動畫狀態（pane.json）放在存檔旁邊：NEKO_STATE 那個資料夾，不然 ~/neko
+/// 動畫狀態（pane.json）放在存檔旁邊
 fn pane_path() -> PathBuf {
-    if let Ok(p) = std::env::var("NEKO_STATE") {
-        return PathBuf::from(p).with_file_name("pane.json");
-    }
-    PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into())).join("neko/pane.json")
+    crate::core::state_path().with_file_name("pane.json")
 }
 
 fn main() {
@@ -85,6 +82,17 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        // 餵食：交給 Python 算，成功的話貓演吃飯（neko shell 的按鈕、Claude Code 外掛都用這個）
+        "feed" => {
+            let food = std::env::args().nth(2).unwrap_or_else(|| "dry".into());
+            match pix::feed(&food, &pane_path()) {
+                Ok(msg) => println!("{}", msg),
+                Err(e) => {
+                    eprintln!("neko: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
         // 把 shell 包起來，貓住在終端機的空白處；exit 離開
         "shell" => {
             let name = crate::core::name();
@@ -102,6 +110,7 @@ fn main() {
                 "neko                         全螢幕的貓（字越小畫得越細，按 q 離開）\n\
                  neko shell                   開一個 shell，貓住在終端機的空白處（exit 離開）\n\
                  neko line                    印一行狀態（給 tmux 狀態列）\n\
+                 neko feed <dry|wet|treat>    餵食（份量用預設的：乾糧 10 克、濕食 40 克、零食 4 克）\n\
                  \n\
                  給 Claude Code 的 mod 用：\n\
                  neko stream <寬> [倍率] [fps] 一直輸出畫面\n\

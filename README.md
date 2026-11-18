@@ -105,7 +105,7 @@ $ curl -s -X POST localhost:8000/simulate -H 'Content-Type: application/json' \
 [{"day":0,"w":4.0,"bcs":5,"need":237.6}, ..., {"day":90,"w":4.3974,"bcs":6,"need":255.1}]
 ```
 
-`mood` 可能是：`starving`、`hungry`、`full`、`sleep`、`bored`、`happy`、`ok`。
+`mood` 可能是：`starving`、`hungry`、`full`、`bored`、`happy`、`ok`。
 
 ### neko-core（給終端機版用的指令）
 
@@ -152,11 +152,14 @@ cargo build --release
 ./target/release/neko          # 全螢幕的貓（按 q 離開）
 ./target/release/neko shell    # 開一個 shell，貓住在終端機的空白處（exit 離開）
 ./target/release/neko line     # 印一行狀態，例如：(^.^) 芝麻 3.99kg 肚子17%
+./target/release/neko feed wet # 餵食（dry 乾糧 10 克、wet 濕食 40 克、treat 零食 4 克）
 ```
 
 `neko shell` 會把你的 shell 包起來，終端機照常使用，貓只出現在現在空白、而且平常很少被寫到的地方（多半是右下角）。輸出一碰到貓那塊，那塊立刻還給你，貓換到別的空地；vim、less 這類全螢幕程式執行時貓會先躲起來。
 
-`mod/` 是 Claude Code 的外掛，讓貓在 Claude 工作時陪在旁邊、看它做什麼。先 `cargo build --release`，再把 `mod/` 加進 Claude Code 的外掛資料夾（例如設定 `CLAUDE_CODE_PLUGIN_DIRS=<repo>/mod`）。外掛預設執行 `<repo>/target/release/neko`；執行檔放在別的地方的話，設定環境變數 `NEKO_BIN` 指過去。
+`neko shell` 最下面一列是貓的狀態。餵食：按 **Ctrl+]** 再按 **1** 乾糧、**2** 濕食、**3** 零食（畫面上不顯示按鈕；連按兩次 Ctrl+] 會送出真的 Ctrl+] 給 shell）。
+
+`mod/` 是 Claude Code 的外掛，讓貓在 Claude 工作時陪在旁邊、看它做什麼。餵食用 `/neko 乾糧`、`/neko 濕食`、`/neko 零食`。先 `cargo build --release`，再把 `mod/` 加進 Claude Code 的外掛資料夾（例如設定 `CLAUDE_CODE_PLUGIN_DIRS=<repo>/mod`）。外掛預設執行 `<repo>/target/release/neko`；執行檔放在別的地方的話，設定環境變數 `NEKO_BIN` 指過去。
 
 ---
 

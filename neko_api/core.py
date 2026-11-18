@@ -50,7 +50,7 @@ def status(c: Cat, now: float | None = None) -> dict[str, Any]:
 def line(c: Cat) -> str:
     """一行狀態（tmux 狀態列用），例如 (^.^) 芝麻 3.99kg 肚子17%"""
     m = c.mood()
-    face = "(-.-)zZ" if m == Mood.SLEEP else "(>.<)!" if m == Mood.STARVING else f"({c.face()})"
+    face = "(>.<)!" if m == Mood.STARVING else f"({c.face()})"
     return f"{face} {c.name} {c.w:.2f}kg 肚子{c.belly / need(c.w) * 100:.0f}%"
 
 

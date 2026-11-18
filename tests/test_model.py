@@ -69,12 +69,13 @@ def test_bcs(w, bcs):
 
 def test_mood():
     n = need(IDEAL)
-    assert cat(belly=0.0).mood(12) is Mood.STARVING
-    assert cat(belly=n * 0.05).mood(12) is Mood.HUNGRY
-    assert cat(belly=n * 0.95).mood(12) is Mood.FULL
-    assert cat(belly=n * 0.5).mood(2) is Mood.SLEEP
-    assert cat(belly=n * 0.5, joy=10).mood(10) is Mood.BORED
-    assert cat(belly=n * 0.5, joy=90).mood(10) is Mood.HAPPY
+    assert cat(belly=0.0).mood() is Mood.STARVING
+    assert cat(belly=n * 0.05).mood() is Mood.HUNGRY
+    assert cat(belly=n * 0.95).mood() is Mood.FULL
+    assert cat(belly=n * 0.5, joy=10).mood() is Mood.BORED
+    assert cat(belly=n * 0.5, joy=90).mood() is Mood.HAPPY
+    assert cat(belly=n * 0.5, joy=50).mood() is Mood.OK
+    assert not hasattr(Mood, "SLEEP")  # 不會因為時間自己睡
 
 
 def test_roundtrip_dict():

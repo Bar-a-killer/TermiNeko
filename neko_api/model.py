@@ -17,7 +17,7 @@ FACTOR = 1.2  # 結紮成貓
 IDEAL = 4.0  # 理想體重（kg）
 FLOOR = IDEAL * 0.72  # 體重下限：太久沒回來，鄰居會幫忙餵
 LOG_LIMIT = 60  # 存檔時只保留最近幾筆紀錄
-NAMES = ["麻糬", "芝麻", "布丁", "饅頭", "年糕", "豆花", "肉鬆"]
+DEFAULT_NAME = "TCSG12"  # 新領養的貓沒取名時叫這個
 
 
 def need(w: float) -> float:
@@ -53,7 +53,6 @@ class Mood(str, Enum):
     STARVING = "starving"
     HUNGRY = "hungry"
     FULL = "full"
-    SLEEP = "sleep"
     BORED = "bored"
     HAPPY = "happy"
     OK = "ok"
@@ -63,7 +62,6 @@ FACES = {
     Mood.STARVING: ">.<",
     Mood.HUNGRY: ";.;",
     Mood.FULL: "-.-",
-    Mood.SLEEP: "-.-",
     Mood.BORED: "-_-",
     Mood.HAPPY: "^.^",
     Mood.OK: "o.o",
@@ -94,7 +92,7 @@ class Cat:
     def new(cls, name: str | None = None, now: float | None = None) -> Cat:
         n = time.time() if now is None else now
         c = cls(
-            name=name or NAMES[int(n) % len(NAMES)],
+            name=name or DEFAULT_NAME,
             w=IDEAL,
             belly=need(IDEAL) / 3.0,
             joy=70.0,
@@ -129,7 +127,7 @@ class Cat:
             if isinstance(e, list) and len(e) >= 2 and isinstance(e[0], str) and isinstance(e[1], str):
                 log.append((e[0], e[1]))
         return cls(
-            name=s("name", "貓"),
+            name=s("name", DEFAULT_NAME),
             w=f("w", IDEAL),
             belly=max(f("belly", 0.0), 0.0),
             joy=min(max(f("joy", 50.0), 0.0), 100.0),
@@ -288,8 +286,8 @@ class Cat:
         """體態分數 1–9，5 是理想；每偏離理想體重 10% 差一級。"""
         return min(max(round(5.0 + (self.w / IDEAL - 1.0) / 0.1), 1), 9)
 
-    def mood(self, hour: int | None = None) -> Mood:
-        h = datetime.now().hour if hour is None else hour
+    def mood(self) -> Mood:
+        """心情只看肚子和陪伴；睡不睡覺由畫面那邊決定（Claude 跑很久、等 shell 指令時才睡）。"""
         n = need(self.w)
         if self.belly <= 0.0:
             return Mood.STARVING
@@ -297,16 +295,14 @@ class Cat:
             return Mood.HUNGRY
         if self.belly > n * 0.9:
             return Mood.FULL
-        if h >= 23 or h < 7 or 13 <= h < 15:
-            return Mood.SLEEP
         if self.joy < 25.0:
             return Mood.BORED
         if self.joy > 60.0:
             return Mood.HAPPY
         return Mood.OK
 
-    def face(self, hour: int | None = None) -> str:
-        return FACES[self.mood(hour)]
+    def face(self) -> str:
+        return FACES[self.mood()]
 
 
 # ───────── 模擬（不碰存檔） ─────────

@@ -9,7 +9,6 @@
 //!   每段都從「坐在中間」開始、回到「坐在中間」結束，所以段與段之間是連續的。
 //! - 按下動作：記下當下的姿勢，動作劇本從那個姿勢接過去，做完再走回中間坐好。
 
-use chrono::{Local, TimeZone, Timelike};
 use serde_json::{json, Value};
 use std::f64::consts::PI;
 use std::ops::{Add, Mul, Sub};
@@ -663,53 +662,18 @@ fn bounds(w: f64) -> (f64, f64) {
     }
 }
 
-fn sleepy(t: f64) -> bool {
-    match Local.timestamp_opt(t as i64, 0).single() {
-        Some(d) => {
-            let h = d.hour();
-            !(7..23).contains(&h) || h == 13
-        }
-        None => false,
-    }
-}
-
-/// 平常的閒晃。每段 SLOT 秒，從坐（或睡）在中間開始，也在那裡結束。
+/// 平常的閒晃。每段 SLOT 秒，從坐在中間開始，也在那裡結束。
+/// 閒晃不會睡著：睡覺只在 Claude 跑很久、或在等 shell 指令跑完的時候（外掛和 neko shell 送 doze / wake）。
 fn idle(w: f64, anchor: f64, t: f64) -> (Sc, f64) {
     let k = ((t - anchor) / SLOT).floor().max(0.0);
     let s0 = anchor + k * SLOT;
     let home = home(w);
     let (lo, hi) = bounds(w);
-    let a = k > 0.0 && sleepy(s0);
-    let b = sleepy(s0 + SLOT);
-    let start = if a { P::Sleep } else { P::Sit };
-    let mut sc = Sc::new(key(start), start, home, 1.0);
+    let mut sc = Sc::new(key(P::Sit), P::Sit, home, 1.0);
     sc.lim = (lo, hi);
     let seed = hash(s0.to_bits() ^ 0x5eed);
-    match (a, b) {
-        (true, true) => sc.say("在睡覺"),
-        (false, true) => {
-            sc.say("打了個呵欠");
-            sc.go(P::Yawn);
-            sc.hold(1.2, Anim::Still);
-            sc.say("想睡了");
-            sc.go(P::Sit);
-            sc.go(P::Loaf);
-            sc.say("在睡覺");
-            sc.go(P::Sleep);
-        }
-        (true, false) => {
-            sc.say("在睡覺");
-            sc.hold(2.0, Anim::Sleep);
-            sc.say("醒來了");
-            sc.go(P::Loaf);
-            sc.say("伸懶腰");
-            sc.go(P::Stretch);
-            sc.hold(1.6, Anim::Still);
-            sc.go(P::Stand);
-            sc.say("坐著發呆");
-            sc.go(P::Sit);
-        }
-        _ => match [0, 1, 2, 3, 4, 1, 5, 2, 1, 3, 5, 0][(seed % 12) as usize] {
+    {
+        match [0, 1, 2, 3, 4, 1, 5, 2, 1, 3, 5, 0][(seed % 12) as usize] {
             5 => {
                 sc.hold(1.0 + ((seed >> 6) % 3) as f64, Anim::Idle);
                 sc.say("轉過來看你");
@@ -761,17 +725,12 @@ fn idle(w: f64, anchor: f64, t: f64) -> (Sc, f64) {
             4 => {
                 sc.say("趴下來休息");
                 sc.go(P::Loaf);
-                sc.hold(6.0, Anim::Idle);
-                sc.say("在打盹");
-                sc.go(P::Sleep);
-                sc.hold(5.0, Anim::Sleep);
-                sc.say("醒來了");
-                sc.go(P::Loaf);
+                sc.hold(9.0, Anim::Idle);
                 sc.go(P::Sit);
                 sc.say("坐著發呆");
             }
             _ => {}
-        },
+        }
     }
     if sc.node == P::Sit {
         sc.say("坐著發呆");
@@ -1252,7 +1211,13 @@ pub fn status_line(name: &str) -> String {
     let cache = CACHE.get_or_init(|| Mutex::new((f64::NEG_INFINITY, String::new())));
     let (at, line) = cache.lock().map(|g| g.clone()).unwrap_or((0.0, String::new()));
     let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
-    if t - at > 30.0 && !ASKING.swap(true, Ordering::SeqCst) {
+    // 存檔改過（剛餵過、API 改了）就馬上重問，不然每 30 秒問一次
+    let saved = std::fs::metadata(crate::core::state_path())
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0.0, |d| d.as_secs_f64());
+    if (t - at > 30.0 || saved > at) && !ASKING.swap(true, Ordering::SeqCst) {
         let name = name.to_string();
         std::thread::spawn(move || {
             let got = crate::core::once(&["line"]).unwrap_or_default();
@@ -1265,6 +1230,16 @@ pub fn status_line(name: &str) -> String {
         });
     }
     line
+}
+
+/// 餵食：Python 算營養、寫紀錄；成功的話貓演吃飯。回傳要顯示的訊息
+pub fn feed(food: &str, pane_path: &Path) -> Result<String, String> {
+    let out = crate::core::once(&["feed", food])?;
+    let v: serde_json::Value = serde_json::from_str(&out).map_err(|_| format!("neko-core 回了看不懂的東西：{}", out))?;
+    let msg = v.get("message").and_then(|m| m.as_str()).unwrap_or("").to_string();
+    let name = v.get("cat").and_then(|c| c.get("name")).and_then(|n| n.as_str()).unwrap_or("TCSG12").to_string();
+    let _ = act("eat", 60, 1.0, &name, pane_path);
+    Ok(msg)
 }
 
 pub fn raster(cols: usize, k: f64, name: &str, pane_path: &Path) -> String {
@@ -2714,6 +2689,112 @@ fn winsize(fd: i32) -> (u16, u16) {
     }
 }
 
+/// neko shell 最下面那一列：貓的營養狀態（餵食是 Ctrl+] 再按 1/2/3，畫面上不顯示）
+struct Bar {
+    armed: bool,           // 按了 Ctrl+]，等數字
+    msg: String,           // 剛餵完的訊息
+    msg_until: f64,
+    feeding: bool,         // 正在等 Python 回覆
+    drawn: String,         // 上次畫的內容（一樣就不重畫）
+}
+
+const FOODS: [(&str, &str); 3] = [("dry", "乾糧"), ("wet", "濕食"), ("treat", "零食")];
+
+impl Bar {
+    /// 這一列要顯示的字（已經截到 cols 寬）
+    fn text(&self, name: &str, cols: usize, t: f64) -> (String, String) {
+        use unicode_width::UnicodeWidthStr;
+        // 左邊：剛餵完的訊息，不然是營養狀態（把名字放回表情後面：(o.o) 芝麻 3.99kg 肚子16%）
+        let left = if t < self.msg_until {
+            self.msg.clone()
+        } else if self.feeding {
+            "餵食中…".to_string()
+        } else {
+            let st = status_line(name);
+            match st.split_once(' ') {
+                Some((face, rest)) => format!("{} {} {}", face, name, rest),
+                None => name.to_string(),
+            }
+        };
+        // 不畫按鈕也不寫提示：Ctrl+] 再按 1/2/3 照樣能餵
+        let right = String::new();
+        let room = cols.saturating_sub(UnicodeWidthStr::width(right.as_str()) + 2);
+        let mut l = String::new();
+        let mut used = 0;
+        for ch in format!(" {}", left).chars() {
+            let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+            if used + w > room {
+                break;
+            }
+            used += w;
+            l.push(ch);
+        }
+        let gap = cols.saturating_sub(used + UnicodeWidthStr::width(right.as_str()) + 1);
+        (format!("{}{}", l, " ".repeat(gap)), if UnicodeWidthStr::width(right.as_str()) + 1 <= cols { format!("{} ", right) } else { String::new() })
+    }
+
+    /// 畫在真的終端機最後一列（shell 的畫面少一列，碰不到這裡）
+    fn draw(&mut self, name: &str, rows: u16, cols: u16, t: f64, force: bool, buf: &mut Vec<u8>) -> bool {
+        let (l, r) = self.text(name, cols as usize, t);
+        let key = format!("{}{}{}", l, r, self.armed);
+        if !force && key == self.drawn {
+            return false;
+        }
+        self.drawn = key;
+        buf.extend_from_slice(format!("\x1b[{};1H\x1b[0;48;5;236;38;5;250m{}", rows, l).as_bytes());
+        buf.extend_from_slice(format!("{}\x1b[0m", r).as_bytes());
+        true
+    }
+}
+
+/// shell 送出來的「設定捲動範圍」（CSI 上;下 r）改成不包含最後一列，最後一列留給 Bar
+fn keep_bar_row(chunk: &[u8], inner: u16) -> Vec<u8> {
+    let mut out = Vec::with_capacity(chunk.len() + 16);
+    let mut i = 0;
+    while i < chunk.len() {
+        if chunk[i] == 0x1b && i + 1 < chunk.len() && chunk[i + 1] == b'[' {
+            let mut j = i + 2;
+            while j < chunk.len() && (chunk[j].is_ascii_digit() || chunk[j] == b';') {
+                j += 1;
+            }
+            if j < chunk.len() && chunk[j] == b'r' {
+                let params = std::str::from_utf8(&chunk[i + 2..j]).unwrap_or("");
+                let mut it = params.split(';');
+                let top: u16 = it.next().and_then(|x| x.parse().ok()).filter(|&x| x > 0).unwrap_or(1);
+                let bot: u16 = it.next().and_then(|x| x.parse().ok()).filter(|&x| x > 0).unwrap_or(inner).min(inner);
+                out.extend_from_slice(format!("\x1b[{};{}r", top, bot).as_bytes());
+                i = j + 1;
+                continue;
+            }
+        }
+        // ESC c（整個重設）會把捲動範圍也重設：補回去
+        if chunk[i] == 0x1b && i + 1 < chunk.len() && chunk[i + 1] == b'c' {
+            out.extend_from_slice(format!("\x1bc\x1b[1;{}r", inner).as_bytes());
+            i += 2;
+            continue;
+        }
+        out.push(chunk[i]);
+        i += 1;
+    }
+    out
+}
+
+/// 這段輸出可能把最後一列（Bar）清掉：清畫面、整個重設、切換全螢幕程式的畫面
+fn may_clear_bar(chunk: &[u8]) -> bool {
+    chunk_erases(chunk)
+        || chunk.windows(2).any(|w| w == b"\x1bc")
+        || chunk.windows(5).any(|w| w == b"?1049" || w == b"?1047")
+        || chunk.windows(4).any(|w| w == b"[?47")
+}
+
+enum Ev {
+    Out(Vec<u8>),
+    End,
+    Armed(bool),
+    Feed(&'static str),
+    Fed(Result<String, String>),
+}
+
 pub fn shell(name: &str, pane_path: &Path) -> std::io::Result<i32> {
     use std::io::{Read, Write};
     use std::os::fd::{FromRawFd, OwnedFd};
@@ -2724,6 +2805,8 @@ pub fn shell(name: &str, pane_path: &Path) -> std::io::Result<i32> {
         eprintln!("已經在 neko shell 裡了。");
         return Ok(1);
     }
+    // shell 的畫面比終端機少一列：最後一列是 Bar
+    let inner_rows = |r: u16| r.saturating_sub(1).max(1);
     // 開 pty
     let master = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY) };
     if master < 0 || unsafe { libc::grantpt(master) } != 0 || unsafe { libc::unlockpt(master) } != 0 {
@@ -2731,7 +2814,7 @@ pub fn shell(name: &str, pane_path: &Path) -> std::io::Result<i32> {
     }
     let slave_name = unsafe { std::ffi::CStr::from_ptr(libc::ptsname(master)) }.to_string_lossy().into_owned();
     let (rows, cols) = winsize(0);
-    let ws = libc::winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
+    let ws = libc::winsize { ws_row: inner_rows(rows), ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
     unsafe { libc::ioctl(master, libc::TIOCSWINSZ, &ws) };
 
     let sh = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
@@ -2755,29 +2838,54 @@ pub fn shell(name: &str, pane_path: &Path) -> std::io::Result<i32> {
     let mut from_shell = std::fs::File::from(master_fd);
 
     crossterm::terminal::enable_raw_mode()?;
-    let (tx, rx) = mpsc::channel::<Option<Vec<u8>>>();
-    // 鍵盤 → shell
+    let (tx, rx) = mpsc::channel::<Ev>();
+    // 鍵盤 → shell。Ctrl+] 之後的下一個鍵是給貓的：1 乾糧、2 濕食、3 零食；再按一次 Ctrl+] 送出真的 Ctrl+]
+    let keys = tx.clone();
     std::thread::spawn(move || {
         let mut stdin = std::io::stdin().lock();
         let mut buf = [0u8; 4096];
+        let mut armed = false;
         while let Ok(n) = stdin.read(&mut buf) {
-            if n == 0 || to_shell.write_all(&buf[..n]).is_err() {
+            if n == 0 {
+                break;
+            }
+            let mut pass = Vec::with_capacity(n);
+            for &b in &buf[..n] {
+                if armed {
+                    armed = false;
+                    let _ = keys.send(Ev::Armed(false));
+                    match b {
+                        b'1'..=b'3' => {
+                            let _ = keys.send(Ev::Feed(FOODS[(b - b'1') as usize].0));
+                        }
+                        0x1d => pass.push(0x1d),
+                        _ => {} // Esc 或其他鍵：取消
+                    }
+                } else if b == 0x1d {
+                    armed = true;
+                    let _ = keys.send(Ev::Armed(true));
+                } else {
+                    pass.push(b);
+                }
+            }
+            if !pass.is_empty() && to_shell.write_all(&pass).is_err() {
                 break;
             }
         }
     });
     // shell → 主迴圈
+    let out_tx = tx.clone();
     std::thread::spawn(move || {
         let mut buf = vec![0u8; 65536];
         loop {
             match from_shell.read(&mut buf) {
                 Ok(n) if n > 0 => {
-                    if tx.send(Some(buf[..n].to_vec())).is_err() {
+                    if out_tx.send(Ev::Out(buf[..n].to_vec())).is_err() {
                         break;
                     }
                 }
                 _ => {
-                    let _ = tx.send(None);
+                    let _ = out_tx.send(Ev::End);
                     break;
                 }
             }
@@ -2789,45 +2897,87 @@ pub fn shell(name: &str, pane_path: &Path) -> std::io::Result<i32> {
     const SYNC_OFF: &[u8] = b"\x1b[?2026l";
 
     let mut out = std::io::stdout().lock();
-    let mut vt = vt100::Parser::new(rows, cols, 0);
+    let mut vt = vt100::Parser::new(inner_rows(rows), cols, 0);
     let mut heat = vec![0.0f64; cols as usize];
     let mut size = (rows, cols);
     let mut cat = Overlay { pos: None, travel: None, h: 0, k: 1.0, drawn: Default::default(), next_wander: now() + 10.0 };
+    let mut bar = Bar { armed: false, msg: String::new(), msg_until: 0.0, feeding: false, drawn: String::new() };
     let mut quiet_until = 0.0; // 大量輸出時先不要畫貓，等輸出停一下
     let mut last_frame = 0.0;
+    // 等 shell 指令跑完：前景是別的程式（不是 shell 自己）超過 SHELL_NAP 秒，貓就睡著，跑完醒來
+    const SHELL_NAP: f64 = 10.0;
+    let shell_pid = child.id() as libc::pid_t;
+    let mut busy_since: Option<f64> = None;
+    let mut dozing = false;
+    let mut last_fg_check = 0.0;
+    // 從乾淨的畫面開始（貓要知道哪裡是空白），最後一列不讓 shell 捲到
+    {
+        let mut b = format!("\x1b[0m\x1b[2J\x1b[1;{}r\x1b[H", inner_rows(rows)).into_bytes();
+        bar.draw(name, rows, cols, now(), true, &mut b);
+        b.extend_from_slice(b"\x1b[H");
+        out.write_all(&b)?;
+        out.flush()?;
+    }
     loop {
         let got = rx.recv_timeout(std::time::Duration::from_millis(40));
         let mut ended = false;
         let mut chunk = Vec::new();
+        let handle = |ev: Ev, chunk: &mut Vec<u8>, ended: &mut bool, bar: &mut Bar| match ev {
+            Ev::Out(b) => chunk.extend(b),
+            Ev::End => *ended = true,
+            Ev::Armed(a) => bar.armed = a,
+            Ev::Feed(food) => {
+                if !bar.feeding {
+                    bar.feeding = true;
+                    let (tx, pane) = (tx.clone(), pane_path.to_path_buf());
+                    std::thread::spawn(move || {
+                        let _ = tx.send(Ev::Fed(feed(food, &pane)));
+                    });
+                }
+            }
+            Ev::Fed(r) => {
+                bar.feeding = false;
+                bar.msg = r.unwrap_or_else(|e| e);
+                bar.msg_until = now() + 4.0;
+            }
+        };
         match got {
-            Ok(Some(b)) => chunk = b,
-            Ok(None) | Err(mpsc::RecvTimeoutError::Disconnected) => ended = true,
+            Ok(ev) => handle(ev, &mut chunk, &mut ended, &mut bar),
+            Err(mpsc::RecvTimeoutError::Disconnected) => ended = true,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
-        while let Ok(more) = rx.try_recv() {
-            match more {
-                Some(b) => chunk.extend(b),
-                None => ended = true,
-            }
+        while let Ok(ev) = rx.try_recv() {
+            handle(ev, &mut chunk, &mut ended, &mut bar);
         }
         let t = now();
         let mut buf: Vec<u8> = Vec::new();
+        let mut redraw_bar = false;
         // 視窗大小變了：告訴 shell；終端機會自己重排，舊的貓不用還原
         let now_size = winsize(0);
         if now_size != size {
             size = now_size;
-            let ws = libc::winsize { ws_row: size.0, ws_col: size.1, ws_xpixel: 0, ws_ypixel: 0 };
+            let inner = inner_rows(size.0);
+            let ws = libc::winsize { ws_row: inner, ws_col: size.1, ws_xpixel: 0, ws_ypixel: 0 };
             unsafe { libc::ioctl(master, libc::TIOCSWINSZ, &ws) };
-            vt.set_size(size.0, size.1);
+            vt.set_size(inner, size.1);
             heat = vec![0.0; size.1 as usize];
             cat.drawn.clear();
             cat.pos = None;
             cat.travel = None;
+            // 捲動範圍跟著新的高度；設定捲動範圍會把游標移到左上，之後放回 shell 的游標
+            buf.extend_from_slice(format!("\x1b[1;{}r", inner).as_bytes());
+            buf.extend_from_slice(&vt.screen().cursor_state_formatted());
+            redraw_bar = true;
         }
         if !chunk.is_empty() {
+            let inner = inner_rows(size.0);
             let old = vt.screen().clone();
             vt.process(&chunk);
             let new = vt.screen();
+            let shown = keep_bar_row(&chunk, inner);
+            if may_clear_bar(&chunk) {
+                redraw_bar = true;
+            }
             // 只有這段輸出真的碰到貓（寫進那幾格、捲動、游標走進去）才讓位；打字、改字不會動到貓
             // 讓位的原因：捲動（貓會被捲走）、字寫進貓的格子、或貓的格子被清掉（例如 zsh 重畫提示字元時清除游標以下）
             let scrolled = !cat.drawn.is_empty() && may_scroll(&chunk, &old, new);
@@ -2835,7 +2985,7 @@ pub fn shell(name: &str, pane_path: &Path) -> std::io::Result<i32> {
             let touched = !cat.drawn.is_empty()
                 && (scrolled
                     || overlap
-                    || chunk.windows(2).any(|w| w == b"\x1b[" ) && chunk_erases(&chunk)
+                    || chunk_erases(&chunk)
                     || cat.drawn.keys().any(|&(r, c)| {
                         old.cell(r as u16, c as u16).map(|x| (x.contents(), x.bgcolor(), x.inverse()))
                             != new.cell(r as u16, c as u16).map(|x| (x.contents(), x.bgcolor(), x.inverse()))
@@ -2850,7 +3000,7 @@ pub fn shell(name: &str, pane_path: &Path) -> std::io::Result<i32> {
                 }
                 buf.extend_from_slice(&old.attributes_formatted());
                 buf.extend_from_slice(&old.cursor_state_formatted());
-                buf.extend_from_slice(&chunk);
+                buf.extend_from_slice(&shown);
                 if chunk.len() < 4096 {
                     // 少量輸出（按 Enter、一兩行）：同一批就把貓畫到新位置，不會閃
                     let mut more = Vec::new();
@@ -2866,7 +3016,7 @@ pub fn shell(name: &str, pane_path: &Path) -> std::io::Result<i32> {
                 }
                 buf.extend_from_slice(SYNC_OFF);
             } else {
-                buf.extend_from_slice(&chunk);
+                buf.extend_from_slice(&shown);
                 if chunk.len() >= 4096 {
                     quiet_until = t + 0.15;
                 }
@@ -2877,12 +3027,46 @@ pub fn shell(name: &str, pane_path: &Path) -> std::io::Result<i32> {
                 let used = (0..r as usize).filter(|&y| !vt_blank(new, y, x)).count() as f64 / r as f64;
                 heat[x] = heat[x] * 0.97 + used * 0.03;
             }
+        }
+        if ended {
+            out.write_all(&buf)?;
+            break;
+        }
+        // 有沒有指令在跑（每半秒看一次）；vim、less 這種全螢幕程式是你在用，不算在等
+        if t - last_fg_check >= 0.5 {
+            last_fg_check = t;
+            let fg = unsafe { libc::tcgetpgrp(master) };
+            let waiting = fg > 0 && fg != shell_pid && !vt.screen().alternate_screen();
+            if waiting {
+                let since = *busy_since.get_or_insert(t);
+                if !dozing && t - since > SHELL_NAP {
+                    dozing = true;
+                    let _ = act("doze", SHELL_W, cat.k, name, pane_path);
+                }
+            } else {
+                busy_since = None;
+                if dozing {
+                    dozing = false;
+                    let _ = act("wake", SHELL_W, cat.k, name, pane_path);
+                }
+            }
+        }
+        // 最下面那一列：內容變了（營養狀態、按了 Ctrl+]、餵完的訊息）或被清掉了就重畫
+        {
+            let mut b = Vec::new();
+            if bar.draw(name, size.0, size.1, t, redraw_bar, &mut b) {
+                let scr = vt.screen();
+                buf.extend_from_slice(SYNC_ON);
+                buf.extend_from_slice(&b);
+                buf.extend_from_slice(&scr.attributes_formatted());
+                buf.extend_from_slice(&scr.cursor_state_formatted());
+                buf.extend_from_slice(SYNC_OFF);
+            }
+        }
+        if !buf.is_empty() {
             out.write_all(&buf)?;
             out.flush()?;
             buf.clear();
-        }
-        if ended {
-            break;
         }
         if t < quiet_until || t - last_frame < 0.08 {
             continue;
@@ -2901,6 +3085,12 @@ pub fn shell(name: &str, pane_path: &Path) -> std::io::Result<i32> {
             out.flush()?;
         }
     }
+    if dozing {
+        let _ = act("wake", SHELL_W, cat.k, name, pane_path);
+    }
+    // 離開：捲動範圍還原、清掉最後一列
+    let _ = write!(out, "\x1b[r\x1b[{};1H\x1b[0m\x1b[2K", size.0);
+    let _ = out.flush();
     let _ = crossterm::terminal::disable_raw_mode();
     let code = child.wait().ok().and_then(|s| s.code()).unwrap_or(0);
     Ok(code)

@@ -11,7 +11,7 @@ async function nekoBin($: Engine): Promise<string> {
   if (override) {
     return (bin = override)
   }
-  const { CLAUDE_PLUGIN_ROOT: root } = await $.process.hookEnv()
+  const { CLAUDE_PLUGIN_ROOT: root = '' } = await $.process.hookEnv()
   const repo = root.replace(/\/+$/, '').replace(/\/[^/]+$/, '')
   return (bin = `${repo}/target/release/neko`)
 }
@@ -20,8 +20,10 @@ const ACTS = ['eat', 'pet', 'play', 'call', 'jump', 'nap']
 const ALIASES: Record<string, string> = { 吃飯: 'eat', 摸摸: 'pet', 丟球: 'play', 叫牠: 'call', 跳: 'jump', 哄睡: 'nap', 收起: 'hide', 出來: 'show' }
 // Claude 工作超過這麼久，貓就趴下睡；做完醒來叫一聲
 const NAP_AFTER_MS = 45_000
+// Claude 跑的 shell 指令超過這麼久還沒好，貓就睡著等；指令跑完醒來（貓只有這兩種時候會睡）
+const SHELL_NAP_MS = 10_000
 const MEOW_AFTER_MS = 20_000
-const HELP = '/neko 吃飯、摸摸、丟球、叫牠、跳、哄睡、收起、出來（也可以用英文 eat、pet、play、call、jump、nap、hide、show）；/neko 大小 1.5 調整解析度'
+const HELP = '/neko 乾糧、濕食、零食 餵食；吃飯、摸摸、丟球、叫牠、跳、哄睡、收起、出來（也可以用英文 dry、wet、treat、eat、pet、play、call、jump、nap、hide、show）；/neko 大小 1.5 調整解析度'
 
 const frame = atom({ plugin: 'neko', key: 'frame' } as const, '')
 const isHidden = atom({ plugin: 'neko', key: 'isHidden' } as const, false)
@@ -76,12 +78,26 @@ async function act($: Engine, what: string, w: number) {
 
 type Engine = Parameters<Hook<'session.start'>>[0]
 
+// 餵食：/neko 乾糧、濕食、零食 → neko feed（Python 算營養、寫紀錄，貓演吃飯）
+const FOODS: Record<string, string> = { 乾糧: 'dry', 濕食: 'wet', 零食: 'treat', dry: 'dry', wet: 'wet', treat: 'treat' }
+
+async function feedCat($: Engine, food: string): Promise<string> {
+  try {
+    const r = await $.process.run([await nekoBin($), 'feed', food], { timeoutMs: 5000 })
+    return (r.exitCode === 0 ? r.stdout : r.stderr.replace(/^neko: /, '')).trim()
+  } catch {
+    return '找不到 neko 執行檔'
+  }
+}
+
 // 這一段工作期間的狀態（mod 重新載入時歸零）
 const live = {
   width: 60,
   maxRows: 99, // 輸入框上方的空間能放幾列（第一次畫之前不知道）
   turnStartedAt: 0, // 主對話這一輪開始的時間；0 表示沒在跑
   hasNapped: false,
+  bashSince: 0, // Claude 的 shell 指令從什麼時候開始跑；0 表示沒在跑
+  bashNapped: false, // 現在睡著是因為在等 shell 指令（不是這一輪跑太久）
   lastStartleAt: 0,
   lastReactAt: 0,
   typingAt: 0,
@@ -156,8 +172,8 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'neko',
-      description: '輸入框上方的貓：吃飯、摸摸、丟球、叫牠、跳、哄睡、收起、出來、大小',
-      argumentHint: '[吃飯|摸摸|丟球|叫牠|跳|哄睡|收起|出來|大小 1.5]',
+      description: '輸入框上方的貓：乾糧、濕食、零食（餵食）、吃飯、摸摸、丟球、叫牠、跳、哄睡、收起、出來、大小',
+      argumentHint: '[乾糧|濕食|零食|吃飯|摸摸|丟球|叫牠|跳|哄睡|收起|出來|大小 1.5]',
     })
 
     scale = Number((await $.store.get('scale')) ?? 1) || 1
@@ -179,6 +195,12 @@ export const register: Register = on => {
           live.hasNapped = true
           await act($, 'doze', live.width) // 一直睡到這一輪結束
           await setActivity($, '等 Claude 等到睡著了')
+        }
+        if (live.bashSince > 0 && !live.hasNapped && Date.now() - live.bashSince > SHELL_NAP_MS) {
+          live.hasNapped = true
+          live.bashNapped = true
+          await act($, 'doze', live.width) // 睡到指令跑完
+          await setActivity($, '等指令跑完等到睡著了')
         }
         // 你停止打字 4 秒後，說明換回貓自己的狀態
         if (live.turnStartedAt === 0 && live.typingAt > 0 && Date.now() - live.typingAt > 4000) {
@@ -207,6 +229,12 @@ export const register: Register = on => {
       await $.store.set('scale', scale)
 
       return { text: `貓改成 ${scale} 倍（${Math.ceil(11 * scale)} 列高）。` }
+    }
+    const food = FOODS[arg]
+    if (food !== undefined) {
+      await update($, isHidden, () => false)
+
+      return { text: await feedCat($, food) }
     }
     const what = ALIASES[arg] ?? arg
     if (what === 'hide' || what === 'show') {
@@ -263,6 +291,8 @@ export const register: Register = on => {
       if (live.hasNapped) {
         // 睡著的貓：做完（或你中斷）時醒來、伸懶腰、叫一聲
         live.hasNapped = false
+        live.bashNapped = false
+        live.bashSince = 0
         void act($, 'wake', live.width).catch(() => {})
       } else if (!e.isAborted && tookMs > MEOW_AFTER_MS) {
         void act($, 'call', live.width).catch(() => {})
@@ -280,7 +310,27 @@ export const register: Register = on => {
     if (!live.hasNapped) {
       await setActivity($, describe(e))
     }
-    const ran = await next(e)
+    if (e.tool === 'Bash') {
+      live.bashSince = Date.now()
+    }
+    let ran: Awaited<ReturnType<typeof next>>
+    try {
+      ran = await next(e)
+    } finally {
+      if (e.tool === 'Bash') {
+        live.bashSince = 0
+        // 指令跑完：因為等指令睡著的就醒來；這一輪已經跑很久的話照樣睡到這一輪結束
+        if (live.bashNapped) {
+          live.bashNapped = false
+          const turnLong = live.turnStartedAt > 0 && Date.now() - live.turnStartedAt > NAP_AFTER_MS
+          if (!turnLong) {
+            live.hasNapped = false
+            void act($, 'wake', live.width).catch(() => {})
+            await setActivity($, '').catch(() => {})
+          }
+        }
+      }
+    }
     const isOk = ran.deny === undefined && ran.isError !== true
     if (!isOk && e.tool === 'Bash' && !live.hasNapped && Date.now() - live.lastStartleAt > 10_000) {
       live.lastStartleAt = Date.now()

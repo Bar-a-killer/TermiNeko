@@ -31,7 +31,7 @@ class CatStatus(BaseModel):
     belly_kcal: float = Field(description="肚子裡還有多少 kcal")
     belly_pct: float = Field(description="肚子飽到幾 %（相對一天份）")
     joy: float = Field(description="心情 0–100")
-    mood: str = Field(description="starving / hungry / full / sleep / bored / happy / ok")
+    mood: str = Field(description="starving / hungry / full / bored / happy / ok")
     face: str
     fed_today_kcal: float
     age_days: float = Field(description="領養幾天了")

@@ -5,6 +5,14 @@
 use serde_json::Value;
 use std::process::{Command, Stdio};
 
+/// 存檔在哪（Python 讀寫它；這裡只拿來看它有沒有變、決定動畫狀態放哪）：NEKO_STATE，不然 ~/neko/state.json
+pub fn state_path() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("NEKO_STATE") {
+        return std::path::PathBuf::from(p);
+    }
+    std::path::PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into())).join("neko/state.json")
+}
+
 /// 啟動 neko-core 的指令
 fn command() -> Command {
     if let Ok(c) = std::env::var("NEKO_CORE") {
@@ -36,11 +44,11 @@ pub fn once(args: &[&str]) -> Result<String, String> {
     }
 }
 
-/// 貓的名字（畫面上的說明用）；問不到就叫「貓」
+/// 貓的名字（畫面上的說明用）；問不到就用預設的 TCSG12
 pub fn name() -> String {
     once(&["status"])
         .ok()
         .and_then(|t| serde_json::from_str::<Value>(&t).ok())
         .and_then(|v| v.get("cat")?.get("name")?.as_str().map(|s| s.to_string()))
-        .unwrap_or_else(|| "貓".to_string())
+        .unwrap_or_else(|| "TCSG12".to_string())
 }
