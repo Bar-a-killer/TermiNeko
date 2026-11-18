@@ -1242,6 +1242,31 @@ fn scene(w: usize, h: usize, k: f64, t: f64, nw: &Now) -> Vec<Cell> {
 
 /// 一格畫面：第一行「欄 列」、第二行說明、第三行 Raster 用的 base64 格子
 /// k 是放大倍率：1 是 11 列；字調小、倍率調大，同樣的實際高度能畫更多像素
+/// 貓的營養狀態（neko-core line，去掉名字），例如「(o.o) 3.99kg 肚子17%」。
+/// 問 Python 要 70 毫秒左右，所以在背景每 30 秒更新一次，畫畫面時只拿快取的；還沒問到時是空字串。
+pub fn status_line(name: &str) -> String {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<(f64, String)>> = OnceLock::new();
+    static ASKING: AtomicBool = AtomicBool::new(false);
+    let cache = CACHE.get_or_init(|| Mutex::new((f64::NEG_INFINITY, String::new())));
+    let (at, line) = cache.lock().map(|g| g.clone()).unwrap_or((0.0, String::new()));
+    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+    if t - at > 30.0 && !ASKING.swap(true, Ordering::SeqCst) {
+        let name = name.to_string();
+        std::thread::spawn(move || {
+            let got = crate::core::once(&["line"]).unwrap_or_default();
+            // 名字已經在行為說明的前面了，這裡拿掉
+            let got = got.replacen(&format!(" {} ", name), " ", 1);
+            if let Ok(mut g) = cache.lock() {
+                *g = (t, got);
+            }
+            ASKING.store(false, Ordering::SeqCst);
+        });
+    }
+    line
+}
+
 pub fn raster(cols: usize, k: f64, name: &str, pane_path: &Path) -> String {
     raster_busy(cols, k, name, pane_path).0
 }
@@ -1261,7 +1286,8 @@ pub fn raster_busy(cols: usize, k: f64, name: &str, pane_path: &Path) -> (String
         }
     }
     let calm = matches!(nw.st.anim, Anim::Idle | Anim::Sleep | Anim::Still) && nw.st.twist == 0.0 && nw.st.lift == 0.0;
-    (format!("{} {}\n{} {}\n{}\n", w, rows, name, nw.st.cap, b64(&bytes)), !calm)
+    // 第二行：「名字 行為<Tab>營養狀態」（外掛會把行為換成 Claude 正在做的事，營養狀態照樣接在後面）
+    (format!("{} {}\n{} {}\t{}\n{}\n", w, rows, name, nw.st.cap, status_line(name), b64(&bytes)), !calm)
 }
 
 /// 倍率：世界寬度要在 40～160 格之間
@@ -1350,7 +1376,7 @@ fn term_loop(out: &mut std::io::Stdout, name: &str, pane_path: &Path) -> std::io
                 }
             }
             // 最下面一行：說明
-            let tip = if t < msg_until { msg.clone() } else { format!("{} {}", name, nw.st.cap) };
+            let tip = if t < msg_until { msg.clone() } else { format!("{} {}  {}", name, nw.st.cap, status_line(name)) };
             // 左邊是狀態，右邊是按鍵；放不下時先縮短按鍵說明，再截狀態
             let width_of = |s: &str| s.chars().map(|c| c.width().unwrap_or(0)).sum::<usize>();
             let keys_long = format!("e 吃飯  p 摸摸  b 丟球  c 叫牠  j 跳  n 哄睡  +/- 大小（×{:.1}）  q 離開 ", k);

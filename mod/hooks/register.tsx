@@ -128,7 +128,7 @@ async function streamFrames($: Engine) {
           // 現在沒有在等 Claude，就叫醒牠
           if (!checkedDoze) {
             checkedDoze = true
-            const caption = text.split('\n')[1] ?? ''
+            const caption = (text.split('\n')[1] ?? '').split('\t')[0] ?? ''
             if (caption.endsWith('等到睡著了') && live.turnStartedAt === 0 && !live.hasNapped) {
               void act($, 'wake', live.width).catch(() => {})
             }
@@ -307,7 +307,10 @@ export const register: Register = on => {
     const { Box, Raster, Text } = $.ui.resolve(e)
     const [size = '', rustCaption = '', cells = ''] = text.split('\n')
     const doing = await read($, activity)
-    const caption = doing === '' ? rustCaption : `${rustCaption.split(' ')[0]} ${doing}`
+    // 「名字 行為<Tab>營養狀態」：Claude 在做事時行為換成那件事，營養狀態接在後面
+    const [behavior = '', nutrition = ''] = rustCaption.split('\t')
+    const said = doing === '' ? behavior : `${behavior.split(' ')[0]} ${doing}`
+    const caption = nutrition === '' ? said : `${said}  ${nutrition}`
     const [columns = 0, rows = 0] = size.split(' ').map(Number)
     if (!(columns > 0 && rows > 0) || cells === '') {
       return next(e)
