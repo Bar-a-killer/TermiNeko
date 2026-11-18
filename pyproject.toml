@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neko-api"
+version = "0.1.0"
+description = "住在終端機裡的貓 — Python API"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+neko-api = "neko_api.server:main"
+
+[tool.setuptools]
+packages = ["neko_api"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

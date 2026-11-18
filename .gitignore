@@ -1,0 +1,17 @@
+# Rust
+/target/
+# 只有這台機器用得到的連結設定（指向家目錄裡的 sysroot）
+/.cargo/
+
+# Python
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+
+# 執行時的存檔（每個人的貓不一樣）
+state.json
+state.json.tmp
+state.lock
+pane.json
+pane-term.json
