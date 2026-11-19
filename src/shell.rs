@@ -3,7 +3,7 @@
 //! shell 的輸出原封不動送到真的終端機，同時用 vt100 記下畫面上每一格是什麼。
 //! 貓只畫在「現在是空白、而且平常很少被寫到」的地方；輸出一碰到貓那塊，那塊立刻還原成原本的內容，
 //! 貓換到別的空地（不急的話用走路、跳過去）。vim、less 這種全螢幕程式執行時貓先躲起來。
-//! 最下面一列是貓的營養狀態；Ctrl+] 再按 1/2/3 餵食。指令跑超過 10 秒貓會睡著等。
+//! 最下面一列是貓的營養狀態；Alt+1/2/3 餵食。指令跑超過 10 秒貓會睡著等。
 
 use crate::pix::{act, feed, fit_k, hash, key, now, read_pane, scene, sgr, special, state, status_line, world_w, Anim, Now, St, HPX, NONE, P, ROWS};
 use std::path::Path;
@@ -588,9 +588,39 @@ fn winsize(fd: i32) -> (u16, u16) {
     }
 }
 
-/// neko shell 最下面那一列：貓的營養狀態（餵食是 Ctrl+] 再按 1/2/3，畫面上不顯示）
+/// 輸入開頭是否為 Alt+1/2/3。回傳 (數字, 序列長度)；數字為 None 表示是放開按鍵的事件（吞掉、不餵）。
+/// 支援三種送法：
+/// - 傳統：ESC 1
+/// - kitty 鍵盤協定（fish 4 在支援的終端機上會開啟）：ESC [ 49 ; 3 u，可能帶 :子欄位
+/// - xterm modifyOtherKeys：ESC [ 27 ; 3 ; 49 ~
+fn alt_digit(b: &[u8]) -> Option<(Option<u8>, usize)> {
+    if b.first() != Some(&0x1b) {
+        return None;
+    }
+    match b.get(1)? {
+        d @ b'1'..=b'3' => return Some((Some(d - b'0'), 2)),
+        b'[' => {}
+        _ => return None,
+    }
+    let end = 2 + b[2..].iter().position(|c| !(0x30..0x40).contains(c))?;
+    let params = std::str::from_utf8(&b[2..end]).ok()?;
+    let fields: Vec<Vec<u32>> = params.split(';').map(|f| f.split(':').map(|x| x.parse().unwrap_or(0)).collect()).collect();
+    let first = |i: usize| fields.get(i).and_then(|f| f.first().copied());
+    // 修飾鍵值 = 1 + 位元；Alt 是 2，忽略 Caps Lock（64）、Num Lock（128）
+    let alt_only = |m: Option<u32>| m.is_some_and(|m| m >= 1 && (m - 1) & !(64 | 128) == 2);
+    let (code, mods, release) = match b[end] {
+        b'u' => (first(0)?, first(1), fields.get(1).and_then(|f| f.get(1)) == Some(&3)),
+        b'~' if first(0)? == 27 => (first(2)?, first(1), false),
+        _ => return None,
+    };
+    if !(b'1' as u32..=b'3' as u32).contains(&code) || !alt_only(mods) {
+        return None;
+    }
+    Some((if release { None } else { Some((code - b'0' as u32) as u8) }, end + 1))
+}
+
+/// neko shell 最下面那一列：貓的營養狀態（餵食是 Alt+1/2/3，畫面上不顯示）
 struct Bar {
-    armed: bool, // 按了 Ctrl+]，等數字
     msg: String, // 剛餵完的訊息
     msg_until: f64,
     feeding: bool, // 正在等 Python 回覆
@@ -615,7 +645,7 @@ impl Bar {
                 None => name.to_string(),
             }
         };
-        // 不畫按鈕也不寫提示：Ctrl+] 再按 1/2/3 照樣能餵
+        // 不畫按鈕也不寫提示：Alt+1/2/3 照樣能餵
         let right = String::new();
         let room = cols.saturating_sub(UnicodeWidthStr::width(right.as_str()) + 2);
         let mut l = String::new();
@@ -642,7 +672,7 @@ impl Bar {
     /// 畫在真的終端機最後一列（shell 的畫面少一列，碰不到這裡）
     fn draw(&mut self, name: &str, rows: u16, cols: u16, t: f64, force: bool, buf: &mut Vec<u8>) -> bool {
         let (l, r) = self.text(name, cols as usize, t);
-        let key = format!("{}{}{}", l, r, self.armed);
+        let key = format!("{}{}", l, r);
         if !force && key == self.drawn {
             return false;
         }
@@ -696,7 +726,6 @@ fn may_clear_bar(chunk: &[u8]) -> bool {
 enum Ev {
     Out(Vec<u8>),
     End,
-    Armed(bool),
     Feed(&'static str),
     Fed(Result<String, String>),
 }
@@ -750,33 +779,30 @@ pub fn run(name: &str, pane_path: &Path) -> std::io::Result<i32> {
 
     crossterm::terminal::enable_raw_mode()?;
     let (tx, rx) = mpsc::channel::<Ev>();
-    // 鍵盤 → shell。Ctrl+] 之後的下一個鍵是給貓的：1 乾糧、2 濕食、3 零食；再按一次 Ctrl+] 送出真的 Ctrl+]
+    // 鍵盤 → shell。Alt+1/2/3 是給貓的：1 乾糧、2 濕食、3 零食（Alt 組合鍵不經過輸入法）。
+    // 送法依終端機的鍵盤模式而定，見 alt_digit()；其餘位元組原樣送給 shell。
     let keys = tx.clone();
     std::thread::spawn(move || {
         let mut stdin = std::io::stdin().lock();
         let mut buf = [0u8; 4096];
-        let mut armed = false;
         while let Ok(n) = stdin.read(&mut buf) {
             if n == 0 {
                 break;
             }
             let mut pass = Vec::with_capacity(n);
-            for &b in &buf[..n] {
-                if armed {
-                    armed = false;
-                    let _ = keys.send(Ev::Armed(false));
-                    match b {
-                        b'1'..=b'3' => {
-                            let _ = keys.send(Ev::Feed(FOODS[(b - b'1') as usize].0));
+            let mut i = 0;
+            while i < n {
+                match alt_digit(&buf[i..n]) {
+                    Some((d, len)) => {
+                        if let Some(d @ 1..=3) = d {
+                            let _ = keys.send(Ev::Feed(FOODS[(d - 1) as usize].0));
                         }
-                        0x1d => pass.push(0x1d),
-                        _ => {} // Esc 或其他鍵：取消
+                        i += len;
                     }
-                } else if b == 0x1d {
-                    armed = true;
-                    let _ = keys.send(Ev::Armed(true));
-                } else {
-                    pass.push(b);
+                    None => {
+                        pass.push(buf[i]);
+                        i += 1;
+                    }
                 }
             }
             if !pass.is_empty() && to_shell.write_all(&pass).is_err() {
@@ -820,7 +846,6 @@ pub fn run(name: &str, pane_path: &Path) -> std::io::Result<i32> {
         next_wander: now() + 10.0,
     };
     let mut bar = Bar {
-        armed: false,
         msg: String::new(),
         msg_until: 0.0,
         feeding: false,
@@ -849,7 +874,6 @@ pub fn run(name: &str, pane_path: &Path) -> std::io::Result<i32> {
         let handle = |ev: Ev, chunk: &mut Vec<u8>, ended: &mut bool, bar: &mut Bar| match ev {
             Ev::Out(b) => chunk.extend(b),
             Ev::End => *ended = true,
-            Ev::Armed(a) => bar.armed = a,
             Ev::Feed(food) => {
                 if !bar.feeding {
                     bar.feeding = true;
@@ -980,7 +1004,7 @@ pub fn run(name: &str, pane_path: &Path) -> std::io::Result<i32> {
                 }
             }
         }
-        // 最下面那一列：內容變了（營養狀態、按了 Ctrl+]、餵完的訊息）或被清掉了就重畫
+        // 最下面那一列：內容變了（營養狀態、餵完的訊息）或被清掉了就重畫
         {
             let mut b = Vec::new();
             if bar.draw(name, size.0, size.1, t, redraw_bar, &mut b) {
@@ -1023,4 +1047,30 @@ pub fn run(name: &str, pane_path: &Path) -> std::io::Result<i32> {
     let _ = crossterm::terminal::disable_raw_mode();
     let code = child.wait().ok().and_then(|s| s.code()).unwrap_or(0);
     Ok(code)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::alt_digit;
+
+    #[test]
+    fn alt_digit_forms() {
+        assert_eq!(alt_digit(b"\x1b1rest"), Some((Some(1), 2)));
+        assert_eq!(alt_digit(b"\x1b[50;3u"), Some((Some(2), 7)));
+        assert_eq!(alt_digit(b"\x1b[51:35;3u"), Some((Some(3), 10)));
+        assert_eq!(alt_digit(b"\x1b[49;3:3u"), Some((None, 9))); // 放開
+        assert_eq!(alt_digit(b"\x1b[49;67u"), Some((Some(1), 8))); // Caps Lock 開著
+        assert_eq!(alt_digit(b"\x1b[27;3;49~"), Some((Some(1), 10)));
+    }
+
+    #[test]
+    fn other_keys_pass_through() {
+        assert_eq!(alt_digit(b"\x1b4"), None);
+        assert_eq!(alt_digit(b"\x1b[A"), None); // 方向鍵
+        assert_eq!(alt_digit(b"\x1b[49;5u"), None); // Ctrl+1
+        assert_eq!(alt_digit(b"\x1b[49u"), None); // 沒有修飾鍵
+        assert_eq!(alt_digit(b"\x1b[15~"), None); // F5
+        assert_eq!(alt_digit(b"\x1b[49;3"), None); // 不完整
+        assert_eq!(alt_digit(b"1"), None);
+    }
 }

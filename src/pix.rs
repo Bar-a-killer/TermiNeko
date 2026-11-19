@@ -293,7 +293,7 @@ struct Sc {
     t: f64,
     cap: &'static str,
     marks: Vec<(&'static str, f64)>,
-    bowl: Option<f64>,
+    bowl: Option<(f64, f64)>, // 碗的位置、貓吃飯時站的位置（換算寬度時碗跟著貓走）
     ball: Option<(f64, f64)>,
     lim: (f64, f64), // 貓的位置不能超出這個範圍（迴轉用）
 }
@@ -783,7 +783,7 @@ fn action(act: &str, from: Option<&From>, w: f64) -> Option<Sc> {
             let bx = (home + 20.0).min(hi + 11.0).min(w - 5.0);
             let dir = if bx >= x { 1.0 } else { -1.0 };
             let tx = (bx - dir * 11.0).clamp(lo, hi);
-            sc.bowl = Some(bx);
+            sc.bowl = Some((bx, tx));
             sc.say("聞到飯香");
             sc.walk(tx, false);
             sc.face(dir);
@@ -987,8 +987,10 @@ pub(crate) fn state(pane: &Option<Pane>, t: f64, w: f64) -> Now {
                         lo + (x - alo) * (hi - lo) / (ahi - alo) // 變窄：等比例縮進新的範圍
                     }
                 };
-                st.x = fit(st.x).clamp(bounds(w).0.min(home(w)), bounds(w).1.max(home(w)));
-                let bowl = sc.bowl.map(|bx| fit(bx).clamp(4.0, w - 4.0)).map(|bx| {
+                let place = |x: f64| fit(x).clamp(bounds(w).0.min(home(w)), bounds(w).1.max(home(w)));
+                st.x = place(st.x);
+                // 碗不另外換算：放在貓吃飯位置換算後的同一個相對距離，否則畫面變窄時兩者距離被壓縮而錯開
+                let bowl = sc.bowl.map(|(bx, tx)| (place(tx) + (bx - tx)).clamp(4.0, w - 4.0)).map(|bx| {
                     let (a, b) = (sc.at("eat0"), sc.at("eat1"));
                     let level = if tr < a {
                         1.0
@@ -1084,21 +1086,23 @@ impl Layer {
             self.ch[y as usize * self.w + x as usize] = c;
         }
     }
-    /// 貼上 assets/cat.json 的小圖：cx 是物品中心的欄，up 是額外離地的格數
-    fn sprite(&mut self, k: f64, cx: f64, up: i32, name: &str) {
+    /// 貼上 assets/cat.json 的小圖：cx 是物品中心（世界座標），up 是額外離地的高度
+    fn sprite(&mut self, k: f64, cx: f64, up: f64, name: &str) {
         if let Some(sp) = crate::assets::get().sprites.get(name) {
-            self.art(k, cx.round() as i32 + sp.dx, sp.top + up, &sp.rows);
+            self.art(k, cx + sp.dx as f64, sp.top as f64 + up, &sp.rows);
         }
     }
     /// 小圖放大 k 倍貼上：x 是世界座標的欄，top 是最上面那列離地幾格（地面那列是 0）
-    fn art(&mut self, k: f64, x: i32, top: i32, rows: &[String]) {
+    /// 座標直接乘 k 再取整（不先把世界座標取整），和畫貓的換算一致，任何倍率下都不會錯開
+    fn art(&mut self, k: f64, x: f64, top: f64, rows: &[String]) {
         let yg = self.h as i32 - 1;
+        let px = |u: f64| (u * k).round() as i32;
         for (j, r) in rows.iter().enumerate() {
-            let up = top - j as i32;
-            let (y0, y1) = (yg - ((up + 1) as f64 * k).floor() as i32 + 1, yg - (up as f64 * k).floor() as i32);
+            let up = top - j as f64;
+            let (y0, y1) = (yg - px(up + 1.0) + 1, yg - px(up));
             for (i, c) in r.chars().enumerate() {
-                let cx = x + i as i32;
-                let (x0, x1) = ((cx as f64 * k).floor() as i32, ((cx + 1) as f64 * k).floor() as i32);
+                let cx = x + i as f64;
+                let (x0, x1) = (px(cx), px(cx + 1.0));
                 for yy in y0..=y1 {
                     for xx in x0..x1 {
                         self.set(xx, yy, c);
@@ -1138,12 +1142,12 @@ pub(crate) fn scene(w: usize, h: usize, k: f64, t: f64, nw: &Now) -> Vec<Cell> {
     // 碗裡的飼料在貓後面，碗身在貓前面
     if let Some((bx, level)) = nw.bowl {
         if level > 0.66 {
-            cv.sprite(k, bx, 0, "food_full");
+            cv.sprite(k, bx, 0.0, "food_full");
         }
         if level > 0.33 {
-            cv.sprite(k, bx, 0, "food_half");
+            cv.sprite(k, bx, 0.0, "food_half");
         } else if level > 0.02 {
-            cv.sprite(k, bx, 0, "food_low");
+            cv.sprite(k, bx, 0.0, "food_low");
         }
     }
     let cat = draw_cat3(w, h, k, &st.pose, st.x, st.f, st.lift, st.twist);
@@ -1153,10 +1157,10 @@ pub(crate) fn scene(w: usize, h: usize, k: f64, t: f64, nw: &Now) -> Vec<Cell> {
         }
     }
     if let Some((bx, _)) = nw.bowl {
-        cv.sprite(k, bx, 0, "bowl");
+        cv.sprite(k, bx, 0.0, "bowl");
     }
     if let Some((bx, hh)) = nw.ball {
-        cv.sprite(k, bx, hh.round() as i32, "ball");
+        cv.sprite(k, bx, hh, "ball");
     }
 
     // 文字：zZ、愛心、喵、nom（以格為單位）
@@ -2186,4 +2190,43 @@ fn draw_cat3(w: usize, h: usize, k: f64, p: &Pose, cx: f64, f: f64, lift: f64, t
     let hv = to_view(at3(p.head, 0.0));
     ly.head = (cxp + hv.x * s, yg - lp - hv.y * s);
     ly
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 吃飯時碗要在貓嘴前面：任何倍率、劇本排定時的寬度和畫面寬度不同時都一樣（誤差 1 像素內）
+    #[test]
+    fn bowl_stays_under_mouth_at_any_scale() {
+        let t0 = 1_763_370_000.0;
+        for cols in [60usize, 80, 120, 200] {
+            for aw in [40.0, 60.0, 160.0] {
+                for ki in 4..=40 {
+                    let k = fit_k(cols, ki as f64 / 10.0);
+                    let w = world_w(cols, k);
+                    let pane = Some(Pane {
+                        act: "eat".into(),
+                        t: t0,
+                        w: aw,
+                        from: None,
+                    });
+                    let nw = (0..600)
+                        .map(|i| state(&pane, t0 + i as f64 * 0.05, w))
+                        .find(|nw| nw.st.anim == Anim::Eat)
+                        .expect("沒有進入吃飯動畫");
+                    let h = (HPX as f64 * k / 2.0).ceil() as usize * 2;
+                    let st = &nw.st;
+                    let cat = draw_cat3(cols, h, k, &st.pose, st.x, st.f, st.lift, st.twist);
+                    let mut cv = Layer::new(cols, h);
+                    cv.sprite(k, nw.bowl.unwrap().0, 0.0, "bowl");
+                    let xs: Vec<usize> = (0..cols * h).filter(|&i| cv.ch[i] == 'b').map(|i| i % cols).collect();
+                    let bowl_px = (xs.iter().min().unwrap() + xs.iter().max().unwrap() + 1) as f64 / 2.0;
+                    // 嘴在頭中心前方約 2.36 單位（eat 姿勢）
+                    let err = bowl_px - cat.head.0 - 2.36 * k * st.f.signum();
+                    assert!(err.abs() <= 1.0, "cols={} aw={} k={:.2}: 碗偏離嘴 {:.2} 像素", cols, aw, k, err);
+                }
+            }
+        }
+    }
 }
