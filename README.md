@@ -61,7 +61,6 @@ neko shell        # 或 make shell；exit 離開
 
 ```bash
 neko              # 全螢幕的貓（按 q 離開）
-neko line         # 一行狀態，給 tmux 狀態列：set -g status-right '#(neko line)'
 neko feed wet     # 餵食（dry 乾糧 10 克、wet 濕食 40 克、treat 零食 4 克）
 ```
 
@@ -170,7 +169,7 @@ points = simulate(start_w=4.0, daily_kcal=260, days=180)
 ## 開發
 
 ```bash
-make test       # Python 測試
+make test       # Python 測試（Rust 測試：cargo test）
 make fmt        # 整理格式（rustfmt、ruff）
 make check      # 全部檢查一次：格式、clippy、ruff、測試、外掛驗證
 make clean      # 刪掉編譯產物和快取
@@ -181,6 +180,7 @@ make clean      # 刪掉編譯產物和快取
 | `NEKO_STATE` | 存檔位置（預設 `~/neko/state.json`；`pane.json` 等動畫狀態放在同一個資料夾） |
 | `NEKO_CORE` | `neko-core` 在哪（預設依序找這個 repo 的 `.venv/bin/neko-core`、`PATH`） |
 | `NEKO_BIN` | Claude Code 外掛用的 `neko` 執行檔（預設 `<repo>/target/release/neko`） |
+| `NEKO_ASSETS` | 外觀資料覆蓋檔（JSON）。逐層合併到內建的 `assets/cat.json`，只需包含要修改的項目；格式錯誤時輸出警告並使用內建資料 |
 | `NEKO_LOG` | neko shell 把貓換位置的原因寫到這個檔案（除錯用） |
 
 ### 專案結構
@@ -195,9 +195,11 @@ make clean      # 刪掉編譯產物和快取
 │   └── server.py        FastAPI 路由
 ├── src/                 Rust：只有畫面和終端機互動
 │   ├── main.rs          指令列
+│   ├── assets.rs        載入外觀資料（assets/cat.json + NEKO_ASSETS）
 │   ├── core.rs          呼叫 neko-core
-│   ├── pix.rs           像素畫的貓：姿勢、動作劇本、畫圖、全螢幕版
+│   ├── pix.rs           像素畫的貓：動作劇本、畫圖、全螢幕版
 │   └── shell.rs         neko shell：pty、找空白處、讓位、狀態列
+├── assets/cat.json      外觀資料：顏色、明暗、小圖、姿勢骨架、姿勢轉換（編譯時嵌入）
 ├── mod/                 Claude Code 外掛（hooks/register.tsx）
 ├── tests/               pytest
 ├── Makefile

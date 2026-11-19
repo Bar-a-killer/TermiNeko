@@ -3,6 +3,7 @@
 //! 營養、心情、體重、紀錄的計算和存檔都在 Python 核心（neko_api/，透過 neko-core 指令）；
 //! 這裡只負責畫貓（全螢幕、neko shell、Claude Code 外掛）。
 
+mod assets;
 mod core;
 mod pix;
 mod shell;
@@ -19,22 +20,6 @@ fn pane_path() -> PathBuf {
 fn main() {
     let arg = std::env::args().nth(1).unwrap_or_default();
     match arg.as_str() {
-        // 一行狀態：Python 算好的
-        "line" => match crate::core::once(&["line"]) {
-            Ok(t) => println!("{}", t),
-            Err(e) => {
-                eprintln!("neko: {}", e);
-                std::process::exit(1);
-            }
-        },
-        "pose" => {
-            let a: Vec<String> = std::env::args().collect();
-            let g = |i: usize, d: f64| a.get(i).and_then(|s| s.parse().ok()).unwrap_or(d);
-            print!(
-                "{}",
-                pix::pose_dump(a.get(2).map(|s| s.as_str()).unwrap_or("sit"), g(3, 1.0), g(4, 1.0), g(5, 0.0), g(6, 0.0))
-            );
-        }
         // 一直輸出畫面給 Claude Code 的 mod（每格後面接 0x1E），stdout 關掉就結束
         "stream" => {
             use std::io::Write;
@@ -71,20 +56,15 @@ fn main() {
                 since_sent += t0.elapsed().as_secs_f64();
             }
         }
-        "raster" | "dump" | "do" | "trace" => {
+        "do" => {
             let args: Vec<String> = std::env::args().collect();
             let num = |i: usize| args.get(i).and_then(|s| s.parse().ok()).unwrap_or(60);
             let kf = |i: usize| args.get(i).and_then(|s| s.parse().ok()).unwrap_or(1.0);
             let name = crate::core::name();
-            match arg.as_str() {
-                "raster" => print!("{}", pix::raster(num(2), kf(3), &name, &pane_path())),
-                "dump" => print!("{}", pix::dump(num(2), kf(3), &pane_path())),
-                "trace" => print!("{}", pix::trace(num(2))),
-                _ => println!(
-                    "{}",
-                    pix::act(args.get(2).map(|s| s.as_str()).unwrap_or(""), num(3), kf(4), &name, &pane_path())
-                ),
-            }
+            println!(
+                "{}",
+                pix::act(args.get(2).map(|s| s.as_str()).unwrap_or(""), num(3), kf(4), &name, &pane_path())
+            );
         }
         "" => {
             let name = crate::core::name();
@@ -118,20 +98,15 @@ fn main() {
         }
         _ => {
             println!(
-                "neko                         全螢幕的貓（字越小畫得越細，按 q 離開）\n\
-                 neko shell                   開一個 shell，貓住在終端機的空白處（exit 離開）\n\
-                 neko line                    印一行狀態（給 tmux 狀態列）\n\
-                 neko feed <dry|wet|treat>    餵食（份量用預設的：乾糧 10 克、濕食 40 克、零食 4 克）\n\
+                "neko                         全螢幕模式（字型越小解析度越高，q 結束）\n\
+                 neko shell                   啟動 shell，於終端機空白區域顯示貓（exit 結束）\n\
+                 neko feed <dry|wet|treat>    餵食（預設份量：乾糧 10 g、濕食 40 g、零食 4 g）\n\
                  \n\
-                 給 Claude Code 的 mod 用：\n\
-                 neko stream <寬> [倍率] [fps] 一直輸出畫面\n\
-                 neko raster <寬> [倍率]       輸出一格畫面\n\
+                 Claude Code 外掛使用：\n\
+                 neko stream <寬> [倍率] [fps] 持續輸出畫面\n\
                  neko do <動作> <寬> [倍率]    eat pet play call jump nap look paw doze wake\n\
                  \n\
-                 檢查用：\n\
-                 neko pose <姿勢|walk|run> [面向] [倍率] [距離] [扭轉]  看某個姿勢\n\
-                 neko dump <寬> [倍率]         用字母印出目前畫面（NEKO_NOW=<秒> 指定時間）\n\
-                 neko trace [寬]               逐格檢查有沒有跳格、耳朵有沒有被切"
+                 環境變數 NEKO_ASSETS=<檔案>：以 JSON 覆蓋外觀資料（格式見 assets/cat.json）"
             );
         }
     }

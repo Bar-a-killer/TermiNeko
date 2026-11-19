@@ -1,7 +1,5 @@
 # Rust
 /target/
-# 只有這台機器用得到的連結設定（指向家目錄裡的 sysroot）
-/.cargo/
 
 # Python
 .venv/

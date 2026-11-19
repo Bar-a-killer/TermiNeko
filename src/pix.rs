@@ -17,13 +17,10 @@ use std::path::Path;
 pub const ROWS: usize = 11;
 pub(crate) const HPX: usize = ROWS * 2; // 每格上下兩個像素
 const S: f64 = 0.9; // 姿勢座標 → 像素
-pub(crate) const NONE: u32 = 0x0100_0000;
+pub(crate) const NONE: u32 = crate::assets::NONE;
 const SLOT: f64 = 20.0;
 
 pub(crate) fn now() -> f64 {
-    if let Some(t) = std::env::var("NEKO_NOW").ok().and_then(|s| s.parse().ok()) {
-        return t;
-    }
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs_f64())
@@ -209,232 +206,14 @@ fn idx(p: P) -> usize {
     ALL.iter().position(|q| *q == p).unwrap_or(1)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn mk(
-    hip: (f64, f64),
-    hr: f64,
-    chest: (f64, f64),
-    cr: f64,
-    head: (f64, f64),
-    tilt: f64,
-    fnp: (f64, f64),
-    ffp: (f64, f64),
-    bnp: (f64, f64),
-    bfp: (f64, f64),
-    hock: (f64, f64),
-    tc: (f64, f64),
-    tt: (f64, f64),
-) -> Pose {
-    let p = |a: (f64, f64)| v(a.0, a.1);
-    Pose {
-        hip: p(hip),
-        hip_r: hr,
-        chest: p(chest),
-        chest_r: cr,
-        head: p(head),
-        head_r: 3.4,
-        tilt,
-        fnp: p(fnp),
-        ffp: p(ffp),
-        bnp: p(bnp),
-        bfp: p(bfp),
-        hock: p(hock),
-        tail_c: p(tc),
-        tail_t: p(tt),
-        eye: 0.0,
-        mouth: 0.0,
-    }
-}
-
-/// 各姿勢的骨架。比例參考真的貓：身長約肩高的 1.4 倍、腹下空間約肩高四成、頭寬約等於身體厚度。
+/// 各姿勢的骨架（資料在 assets/cat.json 的 poses）
 pub(crate) fn key(p: P) -> Pose {
-    let sit = mk(
-        (-3.0, 4.0),
-        4.0,
-        (1.0, 9.0),
-        2.7,
-        (2.4, 13.9),
-        0.05,
-        (3.9, 0.6),
-        (2.8, 0.6),
-        (0.9, 0.6),
-        (-0.1, 0.6),
-        (-4.2, 0.3),
-        (-9.5, -1.2),
-        (5.4, 0.8),
-    );
-    match p {
-        P::Stand => mk(
-            (-5.0, 8.1),
-            2.75,
-            (3.8, 8.3),
-            2.85,
-            (8.4, 12.3),
-            0.0,
-            (4.8, 0.6),
-            (3.2, 0.6),
-            (-5.4, 0.6),
-            (-6.8, 0.6),
-            (-1.4, 2.6),
-            (-11.0, 8.0),
-            (-11.5, 14.0),
-        ),
-        P::Sit => sit,
-        P::Loaf => mk(
-            (-3.6, 3.2),
-            3.1,
-            (3.0, 3.3),
-            3.0,
-            (6.8, 6.8),
-            0.0,
-            (6.0, 0.6),
-            (5.0, 0.6),
-            (-1.2, 0.6),
-            (-2.2, 0.6),
-            (-3.0, 0.2),
-            (-9.0, -1.0),
-            (1.5, 0.7),
-        ),
-        P::Sleep => {
-            let mut s = mk(
-                (-3.4, 3.1),
-                3.2,
-                (2.6, 3.0),
-                3.0,
-                (5.6, 4.0),
-                -0.3,
-                (5.4, 0.6),
-                (4.4, 0.6),
-                (-1.2, 0.6),
-                (-2.2, 0.6),
-                (-3.0, 0.2),
-                (-9.0, -1.5),
-                (6.0, 1.0),
-            );
-            s.eye = 1.0;
-            s
-        }
-        P::Eat => {
-            let mut s = mk(
-                (-5.0, 7.4),
-                3.0,
-                (3.6, 6.6),
-                3.0,
-                (9.6, 4.4),
-                -0.75,
-                (5.4, 0.6),
-                (3.8, 0.6),
-                (-5.4, 0.6),
-                (-6.8, 0.6),
-                (-1.4, 2.6),
-                (-11.0, 9.0),
-                (-12.5, 13.0),
-            );
-            s.eye = 1.0;
-            s
-        }
-        P::Crouch => mk(
-            (-4.6, 5.0),
-            3.1,
-            (3.6, 4.6),
-            3.0,
-            (8.2, 7.8),
-            0.05,
-            (6.0, 0.6),
-            (4.6, 0.6),
-            (-4.0, 0.6),
-            (-5.2, 0.6),
-            (-3.4, 1.2),
-            (-10.0, 4.5),
-            (-14.0, 5.5),
-        ),
-        P::Air => mk(
-            (-5.4, 8.2),
-            3.0,
-            (4.6, 8.8),
-            3.0,
-            (9.4, 12.2),
-            0.15,
-            (8.6, 6.4),
-            (7.4, 5.6),
-            (-10.6, 4.6),
-            (-9.6, 4.0),
-            (1.6, 1.4),
-            (-11.5, 9.5),
-            (-15.0, 11.0),
-        ),
-        P::Stretch => {
-            let mut s = mk(
-                (-4.6, 8.2),
-                3.0,
-                (3.4, 4.0),
-                2.8,
-                (8.2, 6.2),
-                0.3,
-                (10.0, 0.6),
-                (8.6, 0.6),
-                (-5.0, 0.6),
-                (-6.2, 0.6),
-                (-0.8, 3.0),
-                (-9.0, 13.0),
-                (-6.5, 16.0),
-            );
-            s.mouth = 0.8;
-            s.eye = 1.0;
-            s
-        }
-        P::Groom => {
-            let mut s = sit;
-            s.head = v(3.3, 13.2);
-            s.tilt = -0.45;
-            s.fnp = v(6.4, 11.4);
-            s.eye = 1.0;
-            s
-        }
-        P::Yawn => {
-            let mut s = sit;
-            s.head = v(2.4, 13.8);
-            s.tilt = 0.4;
-            s.mouth = 1.0;
-            s.eye = 1.0;
-            s
-        }
-        P::Happy => {
-            let mut s = sit;
-            s.head = v(2.8, 13.4);
-            s.tilt = 0.15;
-            s.eye = 2.0;
-            s
-        }
-        P::Meow => {
-            let mut s = sit;
-            s.tilt = 0.3;
-            s.mouth = 0.7;
-            s
-        }
-    }
+    Pose::from(&crate::assets::get().poses[idx(p)]).unwrap_or_else(|| unreachable!("姿勢資料已在載入時檢查"))
 }
 
-/// 姿勢之間能直接轉換的路（秒數是過渡動畫的長度）
-fn edges(p: P) -> &'static [(P, f64)] {
-    match p {
-        P::Stand => &[(P::Sit, 0.6), (P::Loaf, 0.9), (P::Eat, 0.5), (P::Crouch, 0.3), (P::Stretch, 0.6)],
-        P::Sit => &[
-            (P::Stand, 0.6),
-            (P::Loaf, 0.7),
-            (P::Groom, 0.45),
-            (P::Yawn, 0.45),
-            (P::Happy, 0.4),
-            (P::Meow, 0.25),
-        ],
-        P::Loaf => &[(P::Sit, 0.7), (P::Stand, 0.9), (P::Sleep, 0.8), (P::Stretch, 0.7)],
-        P::Sleep => &[(P::Loaf, 0.8)],
-        P::Eat => &[(P::Stand, 0.5)],
-        P::Crouch => &[(P::Stand, 0.3), (P::Air, 0.2)],
-        P::Air => &[(P::Crouch, 0.2)],
-        P::Stretch => &[(P::Stand, 0.6), (P::Loaf, 0.7)],
-        P::Groom | P::Yawn | P::Happy | P::Meow => &[(P::Sit, 0.4)],
-    }
+/// 姿勢之間能直接轉換的路（秒數是過渡動畫的長度；資料在 assets/cat.json 的 edges）
+fn edges(p: P) -> impl Iterator<Item = (P, f64)> {
+    crate::assets::get().edges[idx(p)].iter().map(|&(i, d)| (ALL[i], d))
 }
 
 fn route(from: P, to: P) -> Vec<(P, f64)> {
@@ -446,7 +225,7 @@ fn route(from: P, to: P) -> Vec<(P, f64)> {
         if p == to {
             break;
         }
-        for &(n, d) in edges(p) {
+        for (n, d) in edges(p) {
             if !seen[idx(n)] {
                 seen[idx(n)] = true;
                 prev[idx(n)] = Some((p, d));
@@ -1252,7 +1031,6 @@ struct Geo {
     hn: V, // 跗關節（近、遠）
     hf: V,
     tail: Vec<V>,
-    ear_tip: V,
     muz: V,
     bridge: (V, V), // 鼻樑
 }
@@ -1272,7 +1050,6 @@ impl Geo {
             hn: p.bnp + p.hock,
             hf: p.bfp + p.hock,
             tail,
-            ear_tip: hl(v(1.0, 5.3)),
             muz: hl(v(2.5, -0.9)),
             bridge: (hl(v(2.2, 1.0)), hl(v(3.4, -0.1))),
         }
@@ -1307,8 +1084,14 @@ impl Layer {
             self.ch[y as usize * self.w + x as usize] = c;
         }
     }
+    /// 貼上 assets/cat.json 的小圖：cx 是物品中心的欄，up 是額外離地的格數
+    fn sprite(&mut self, k: f64, cx: f64, up: i32, name: &str) {
+        if let Some(sp) = crate::assets::get().sprites.get(name) {
+            self.art(k, cx.round() as i32 + sp.dx, sp.top + up, &sp.rows);
+        }
+    }
     /// 小圖放大 k 倍貼上：x 是世界座標的欄，top 是最上面那列離地幾格（地面那列是 0）
-    fn art(&mut self, k: f64, x: i32, top: i32, rows: &[&str]) {
+    fn art(&mut self, k: f64, x: i32, top: i32, rows: &[String]) {
         let yg = self.h as i32 - 1;
         for (j, r) in rows.iter().enumerate() {
             let up = top - j as i32;
@@ -1327,33 +1110,7 @@ impl Layer {
 }
 
 fn color(c: char) -> u32 {
-    match c {
-        'k' => 0x3a2618, // 輪廓
-        'o' => 0xf2a250, // 橘毛
-        's' => 0xd8873a, // 毛的暗面
-        't' => 0xb36a2a, // 最暗
-        'g' => 0xe8974a, // 條紋亮面
-        'V' => 0xb9a690, // 白毛最暗
-        'P' => 0xd98494, // 粉紅暗面
-        'l' => 0xffc47e, // 毛的亮面
-        'd' => 0xcc7a2c, // 條紋、內線
-        'D' => 0xc27026, // 遠側的腳和耳朵
-        'K' => 0x8f5220,
-        'w' => 0xfff6ea, // 白毛
-        'W' => 0xe0d2bf,
-        'p' => 0xf4a0b0, // 耳內、嘴
-        'n' => 0xe7798c, // 鼻子
-        'e' => 0x2b1d14, // 眼睛
-        'a' => 0xa9c552, // 虹膜
-        'm' => 0x9a5440, // 嘴巴的線
-        'M' => 0x5a2324, // 張開的嘴裡
-        'b' => 0x5b8dd9, // 碗
-        'B' => 0x3f6fb8,
-        'f' => 0x9a6232, // 飼料
-        'r' => 0xe0483c, // 球
-        'R' => 0xff9a8a,
-        _ => NONE,
-    }
+    crate::assets::get().color(c)
 }
 
 fn b64(d: &[u8]) -> String {
@@ -1380,14 +1137,13 @@ pub(crate) fn scene(w: usize, h: usize, k: f64, t: f64, nw: &Now) -> Vec<Cell> {
 
     // 碗裡的飼料在貓後面，碗身在貓前面
     if let Some((bx, level)) = nw.bowl {
-        let x = bx.round() as i32 - 4;
         if level > 0.66 {
-            cv.art(k, x + 2, 4, &["ffff"]);
+            cv.sprite(k, bx, 0, "food_full");
         }
         if level > 0.33 {
-            cv.art(k, x + 1, 3, &["ffffff"]);
+            cv.sprite(k, bx, 0, "food_half");
         } else if level > 0.02 {
-            cv.art(k, x + 1, 3, &[".ff.f."]);
+            cv.sprite(k, bx, 0, "food_low");
         }
     }
     let cat = draw_cat3(w, h, k, &st.pose, st.x, st.f, st.lift, st.twist);
@@ -1397,11 +1153,10 @@ pub(crate) fn scene(w: usize, h: usize, k: f64, t: f64, nw: &Now) -> Vec<Cell> {
         }
     }
     if let Some((bx, _)) = nw.bowl {
-        let x = bx.round() as i32 - 4;
-        cv.art(k, x, 3, &["B......B", "BbbbbbbB", ".BbbbbB.", "..kkkk.."]);
+        cv.sprite(k, bx, 0, "bowl");
     }
     if let Some((bx, hh)) = nw.ball {
-        cv.art(k, bx.round() as i32 - 1, 3 + hh.round() as i32, &[".rr.", "rRrr", ".rr."]);
+        cv.sprite(k, bx, hh.round() as i32, "ball");
     }
 
     // 文字：zZ、愛心、喵、nom（以格為單位）
@@ -1517,11 +1272,7 @@ pub fn feed(food: &str, pane_path: &Path) -> Result<String, String> {
     Ok(msg)
 }
 
-pub fn raster(cols: usize, k: f64, name: &str, pane_path: &Path) -> String {
-    raster_busy(cols, k, name, pane_path).0
-}
-
-/// 同 raster，另外回傳貓是不是在動（走路、轉身、做動作）：不動的時候可以畫慢一點
+/// 一格畫面，另外回傳貓是不是在動（走路、轉身、做動作）：不動的時候可以畫慢一點
 pub fn raster_busy(cols: usize, k: f64, name: &str, pane_path: &Path) -> (String, bool) {
     let w = cols.clamp(40, 400);
     let k = fit_k(w, k);
@@ -1556,22 +1307,6 @@ pub(crate) fn fit_k(w: usize, k: f64) -> f64 {
 
 pub(crate) fn world_w(w: usize, k: f64) -> f64 {
     (w as f64 / k).floor().clamp(40.0, 160.0)
-}
-
-/// 檢查用：把畫面用字母印出來（每個字母是一個像素）；k 是放大倍率
-pub fn dump(cols: usize, k: f64, pane_path: &Path) -> String {
-    let w = cols.clamp(40, 400);
-    let h = (HPX as f64 * k).ceil() as usize;
-    let nw = state(&read_pane(pane_path), now(), (w as f64 / k).max(40.0));
-    let st = &nw.st;
-    let cat = draw_cat3(w, h, k, &st.pose, st.x, st.f, st.lift, st.twist);
-    let mut s = format!("{}  x={:.1} f={:.2} node={:?} anim={:?}\n", st.cap, st.x, st.f, st.node, st.anim);
-    for j in 0..h {
-        let row: String = cat.ch[j * w..(j + 1) * w].iter().collect();
-        s.push_str(row.trim_end());
-        s.push('\n');
-    }
-    s
 }
 
 /// 單獨在終端機裡跑：全螢幕，畫面越多列（字越小）貓就畫得越細
@@ -1743,90 +1478,6 @@ pub fn act(what: &str, cols: usize, k: f64, name: &str, pane_path: &Path) -> Str
     });
     let _ = std::fs::write(pane_path, v.to_string());
     msg
-}
-
-/// 檢查用：在各種時間點觸發每個動作，逐幀找出姿勢突然跳動的地方
-pub fn trace(cols: usize) -> String {
-    let w = cols.clamp(40, 160) as f64;
-    let base = 1_763_370_000.0;
-    let mut out = String::new();
-    let mut worst = 0.0f64;
-    let acts = ["eat", "pet", "play", "call", "jump", "nap", "look", "paw", "wake", "doze"];
-    for (ai, a) in acts.iter().enumerate() {
-        for k in 0..12 {
-            // 觸發時間：散布在閒晃的各個階段
-            let trig = base + 20.0 * (ai * 12 + k) as f64 + 1.7 * k as f64;
-            // 有時候先做另一個動作，在它中途觸發
-            let prev = if k % 3 == 2 {
-                let pt = trig - 2.3 - k as f64 * 0.4;
-                let pst = state(&None, pt, w).st;
-                Some(Pane {
-                    act: acts[(ai + 1) % acts.len()].to_string(),
-                    t: pt,
-                    w,
-                    from: Some(From {
-                        pose: pst.core,
-                        node: pst.node,
-                        x: pst.x,
-                        f: pst.f,
-                    }),
-                })
-            } else {
-                None
-            };
-            let st = state(&prev, trig, w).st;
-            let pane = Some(Pane {
-                act: a.to_string(),
-                t: trig,
-                w,
-                from: Some(From {
-                    pose: st.core,
-                    node: st.node,
-                    x: st.x,
-                    f: st.f,
-                }),
-            });
-            let mut last: Option<St> = None;
-            let mut t = trig - 1.0;
-            while t < trig + 70.0 {
-                let cur = if t < trig { state(&prev, t, w).st } else { state(&pane, t, w).st };
-                if let Some(l) = &last {
-                    let (pa, pb) = (l.pose.arr(), cur.pose.arr());
-                    let d = (0..24).map(|i| (pa[i] - pb[i]).abs()).fold(0.0, f64::max);
-                    let dx = (l.x - cur.x).abs();
-                    let df = (l.f - cur.f).abs();
-                    let score = d.max(dx / 1.2).max(df * 2.0);
-                    worst = worst.max(score);
-                    let g = Geo::new(cur.pose);
-                    // 耳尖＋平滑接合多出來的一點＋輪廓一格
-                    let top = cur.lift + S * (g.ear_tip.y + 0.6) + 1.0;
-                    if top > HPX as f64 - 1.0 {
-                        out.push_str(&format!("切耳 {} k={} t={:+.2} 高 {:.1} {:?}\n", a, k, t - trig, top, cur.node));
-                    }
-                    if score > 0.5 {
-                        out.push_str(&format!(
-                            "{} k={} t={:+.2} 跳 {:.2}（姿勢 {:.2} x {:.2} 面向 {:.2}）{:?}→{:?} {}→{}\n",
-                            a,
-                            k,
-                            t - trig,
-                            score,
-                            d,
-                            dx,
-                            df,
-                            l.node,
-                            cur.node,
-                            l.cap,
-                            cur.cap
-                        ));
-                    }
-                }
-                last = Some(cur);
-                t += 0.005;
-            }
-        }
-    }
-    out.push_str(&format!("最大單幀變化 {:.2}\n", worst));
-    out
 }
 
 // ───────────────────────── 立體的貓 ─────────────────────────
@@ -2283,23 +1934,9 @@ impl Cat3 {
     }
 }
 
-/// 打光後的顏色字元：tone 0 最亮、3 最暗
+/// 打光後的顏色字元：tone 0 最亮、3 最暗（資料在 assets/cat.json 的 shade）
 fn shade(c: char, tone: u8) -> char {
-    match (c, tone) {
-        ('o', 0) => 'l',
-        ('o', 1) => 'o',
-        ('o', 2) => 's',
-        ('o', _) => 't',
-        ('d', 0) => 'g',
-        ('d', 1) => 'd',
-        ('d', _) => 'D',
-        ('w', 0) | ('w', 1) => 'w',
-        ('w', 2) => 'W',
-        ('w', _) => 'V',
-        ('p', 0) | ('p', 1) => 'p',
-        ('p', _) => 'P',
-        (c, _) => c,
-    }
+    crate::assets::get().shade(c, tone)
 }
 
 /// 立體版的畫貓：f 是面向（1 向右、0 面對你、-1 向左）
@@ -2549,24 +2186,4 @@ fn draw_cat3(w: usize, h: usize, k: f64, p: &Pose, cx: f64, f: f64, lift: f64, t
     let hv = to_view(at3(p.head, 0.0));
     ly.head = (cxp + hv.x * s, yg - lp - hv.y * s);
     ly
-}
-
-/// 檢查用：某個姿勢、某個面向、某個倍率的樣子（字母）
-pub fn pose_dump(name: &str, f: f64, k: f64, dist: f64, twist: f64) -> String {
-    let node = ALL.iter().copied().find(|n| format!("{:?}", n).eq_ignore_ascii_case(name)).unwrap_or(P::Stand);
-    let pose = match name {
-        "walk" => special(key(P::Stand), Anim::Walk, 0.0, dist),
-        "run" => special(key(P::Stand), Anim::Run, 0.0, dist),
-        _ => key(node),
-    };
-    let w = (40.0 * k) as usize;
-    let h = (HPX as f64 * k).ceil() as usize;
-    let cat = draw_cat3(w, h, k, &pose, 20.0, f, 0.0, twist);
-    let mut s = format!("{:?} f={}\n", node, f);
-    for j in 0..h {
-        let row: String = cat.ch[j * w..(j + 1) * w].iter().collect();
-        s.push_str(row.trim_end());
-        s.push('\n');
-    }
-    s
 }
