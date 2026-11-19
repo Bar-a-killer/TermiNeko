@@ -45,8 +45,7 @@ neko shell        # 或 make shell；exit 離開
 
 `mod/` 讓貓在 Claude 工作時陪在輸入框上方：看你打字、陪 Claude 改檔、指令失敗嚇一跳、做完叫你。
 
-1. `make build`
-2. 把 `mod/` 加進 Claude Code 的外掛資料夾，例如設定 `CLAUDE_CODE_PLUGIN_DIRS=<repo>/mod`
+執行 `make claude`：編譯後將外掛安裝到 Claude Code（使用者範圍）。外掛直接讀取此 repo 的 `mod/`，修改後執行 `/reload-plugins` 即生效，因此安裝後不要移動 repo。移除：`make claude-remove`。
 
 外掛會執行 `<repo>/target/release/neko`；放在別的地方的話設定 `NEKO_BIN`。
 
@@ -63,6 +62,19 @@ neko shell        # 或 make shell；exit 離開
 neko              # 全螢幕的貓（按 q 離開）
 neko feed wet     # 餵食（dry 乾糧 10 克、wet 濕食 40 克、treat 零食 4 克）
 ```
+
+### 行為
+
+行為分為主要行為與過渡行為。過渡行為由程式依目前姿勢、面向、位置自動補上。
+
+| 類別 | 行為 |
+|---|---|
+| 主要行為（閒晃） | 坐著發呆、轉過來看你、洗臉、打呵欠、趴著休息、聞地板（走到新地方後） |
+| 主要行為（動作） | 吃飯、被摸、追球、抬頭聽、邊看邊洗臉、回應叫聲、跳、小睡、等到睡著、醒來叫你 |
+| 過渡行為 | 站起、坐下、趴下、蹲低、原地轉身、迴轉、走路、跑、休息後起身伸懶腰 |
+
+- 走路後貓會留在新位置，之後的行為從那裡開始；動作做完也留在原地。
+- 每整點的最後一段會走回畫面中間。
 
 ### 貓什麼時候會睡覺
 

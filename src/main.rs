@@ -17,6 +17,15 @@ fn pane_path() -> PathBuf {
     crate::core::state_path().with_file_name("pane.json")
 }
 
+/// 全螢幕和 neko shell 需要真正的終端機（切換畫面、讀鍵盤）；沒有時說明原因後結束
+fn require_tty(what: &str) {
+    use std::io::IsTerminal;
+    if !(std::io::stdin().is_terminal() && std::io::stdout().is_terminal()) {
+        eprintln!("neko: {} 需要在終端機中執行（目前的輸入或輸出不是終端機）", what);
+        std::process::exit(1);
+    }
+}
+
 fn main() {
     let arg = std::env::args().nth(1).unwrap_or_default();
     match arg.as_str() {
@@ -67,6 +76,7 @@ fn main() {
             );
         }
         "" => {
+            require_tty("neko");
             let name = crate::core::name();
             if let Err(e) = pix::term(&name, &pane_path().with_file_name("pane-term.json")) {
                 eprintln!("neko: {}", e);
@@ -86,6 +96,7 @@ fn main() {
         }
         // 把 shell 包起來，貓住在終端機的空白處；exit 離開
         "shell" => {
+            require_tty("neko shell");
             let name = crate::core::name();
             match shell::run(&name, &pane_path()) {
                 Ok(code) => std::process::exit(code),

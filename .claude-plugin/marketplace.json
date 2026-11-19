@@ -1,0 +1,11 @@
+{
+  "name": "termineko",
+  "owner": { "name": "termineko" },
+  "plugins": [
+    {
+      "name": "neko",
+      "source": "./mod",
+      "description": "輸入框上方的小貓"
+    }
+  ]
+}

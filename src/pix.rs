@@ -4,10 +4,14 @@
 //! 臀部、胸口、頭、四隻腳、尾巴各有位置。每個姿勢是一組數字，
 //! 換姿勢時把數字慢慢插值過去，所以任何兩個行為之間都有過渡動畫。
 //!
+//! 行為分兩類：
+//! - 主要行為：貓在做的事（坐著發呆、看你、洗臉、打呵欠、趴著休息、聞地板，以及吃飯、玩球等動作）。
+//! - 過渡行為：接到下一個主要行為所需的動作（站起、坐下、趴下、轉身、迴轉、走路、跑、休息後伸懶腰）。
+//!
 //! 畫面完全由「時間＋pane.json」算出來，不需要常駐程式：
-//! - 平常：每 20 秒一段閒晃劇本（坐、散步、洗臉、伸懶腰、趴下、打盹…），
-//!   每段都從「坐在中間」開始、回到「坐在中間」結束，所以段與段之間是連續的。
-//! - 按下動作：記下當下的姿勢，動作劇本從那個姿勢接過去，做完再走回中間坐好。
+//! - 平常：一段接一段的閒晃劇本，每段是「過渡（有時走到別處）→ 主要行為 → 回到坐姿」。
+//!   走到別處後就留在那裡，下一段從新位置開始；每整點的最後一段走回中間，推算從那裡重新開始。
+//! - 按下動作：記下當下的姿勢和位置，動作劇本從那裡接過去，做完留在原地，閒晃從那裡接下去。
 
 use serde_json::{json, Value};
 use std::f64::consts::PI;
@@ -18,7 +22,6 @@ pub const ROWS: usize = 11;
 pub(crate) const HPX: usize = ROWS * 2; // 每格上下兩個像素
 const S: f64 = 0.9; // 姿勢座標 → 像素
 pub(crate) const NONE: u32 = crate::assets::NONE;
-const SLOT: f64 = 20.0;
 
 pub(crate) fn now() -> f64 {
     std::time::SystemTime::now()
@@ -263,7 +266,8 @@ pub(crate) enum Anim {
     Meow,
     Lick,
     Wiggle,
-    Turn, // 原地轉身：腳一步一步踩
+    Turn,  // 原地轉身：腳一步一步踩
+    Sniff, // 低頭聞地板
 }
 
 #[derive(Clone)]
@@ -393,6 +397,7 @@ impl Sc {
         if (x - self.x).abs() < 0.5 {
             return;
         }
+        self.get_up();
         self.go(P::Stand);
         let dir = if x > self.x { 1.0 } else { -1.0 };
         let speed = if run { 18.0 } else { 7.0 };
@@ -420,6 +425,21 @@ impl Sc {
             0.0,
             true,
         );
+    }
+    /// 過渡：從休息姿勢（趴、睡）起身，先伸懶腰
+    fn get_up(&mut self) {
+        if matches!(self.node, P::Loaf | P::Sleep) {
+            self.go(P::Loaf);
+            self.say("伸懶腰");
+            self.go(P::Stretch);
+            self.hold(1.4, Anim::Still);
+            self.go(P::Stand);
+        }
+    }
+    /// 過渡：回到坐姿（休息姿勢要先起身）
+    fn settle(&mut self) {
+        self.get_up();
+        self.go(P::Sit);
     }
     /// 補滿到固定長度；太長就整段等比例加速
     fn fill(&mut self, total: f64) {
@@ -637,6 +657,15 @@ pub(crate) fn special(mut p: Pose, a: Anim, tg: f64, dist: f64) -> Pose {
         Anim::Meow => {
             p.mouth = 0.6 + 0.4 * (tg * 5.0).sin().abs();
         }
+        Anim::Sniff => {
+            // 鼻子貼近地面左右移動，偶爾停下來抽動
+            let sweep = (tg * 1.3).sin();
+            p.head.x += 0.9 * sweep;
+            p.head.y += 0.6 + 0.25 * (tg * 9.0).sin().max(0.0);
+            p.tilt += 0.1 * sweep;
+            p.eye = 0.0;
+            p.tail_t.y += 0.6 * (tg * 0.8).sin();
+        }
         Anim::Lick => {
             p.mouth = if (tg * 6.0) as i64 % 2 == 0 { 0.5 } else { 0.0 };
             p.eye = 2.0;
@@ -681,81 +710,199 @@ fn bounds(w: f64) -> (f64, f64) {
     }
 }
 
-/// 平常的閒晃。每段 SLOT 秒，從坐在中間開始，也在那裡結束。
-/// 閒晃不會睡著：睡覺只在 Claude 跑很久、或在等 shell 指令跑完的時候（外掛和 neko shell 送 doze / wake）。
-fn idle(w: f64, anchor: f64, t: f64) -> (Sc, f64) {
-    let k = ((t - anchor) / SLOT).floor().max(0.0);
-    let s0 = anchor + k * SLOT;
-    let home = home(w);
-    let (lo, hi) = bounds(w);
-    let mut sc = Sc::new(key(P::Sit), P::Sit, home, 1.0);
-    sc.lim = (lo, hi);
-    let seed = hash(s0.to_bits() ^ 0x5eed);
-    {
-        match [0, 1, 2, 3, 4, 1, 5, 2, 1, 3, 5, 0][(seed % 12) as usize] {
-            5 => {
-                sc.hold(1.0 + ((seed >> 6) % 3) as f64, Anim::Idle);
+/// 每到這個時間點（epoch 的整數倍）貓會回到中間，劇本從那裡重新推算，推算鏈的長度因此有上限
+const HOME_EVERY: f64 = 3600.0;
+/// 離回中間的時間點不到這麼多秒時，這一段改成走回中間
+const HOME_LEAD: f64 = 60.0;
+
+/// 一段劇本開始時的狀態
+#[derive(Clone, Copy)]
+struct Start {
+    pose: Pose,
+    node: P,
+    x: f64,
+    f: f64,
+}
+
+impl Start {
+    fn sit(x: f64, f: f64) -> Start {
+        Start {
+            pose: key(P::Sit),
+            node: P::Sit,
+            x,
+            f,
+        }
+    }
+    fn end_of(sc: &Sc) -> Start {
+        Start {
+            pose: sc.pose,
+            node: sc.node,
+            x: sc.x,
+            f: sc.f,
+        }
+    }
+}
+
+/// 閒晃時的主要行為
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Main {
+    Gaze,  // 坐著發呆
+    Watch, // 轉過來看你
+    Groom, // 洗臉
+    Yawn,  // 打呵欠
+    Loaf,  // 趴著休息
+    Sniff, // 聞地板
+}
+
+/// 主要行為的出現比例（重複的項目代表權重）
+const MAINS: [Main; 12] = [
+    Main::Gaze,
+    Main::Gaze,
+    Main::Gaze,
+    Main::Watch,
+    Main::Watch,
+    Main::Groom,
+    Main::Groom,
+    Main::Yawn,
+    Main::Loaf,
+    Main::Loaf,
+    Main::Sniff,
+    Main::Sniff,
+];
+
+impl Main {
+    /// 執行主要行為；需要的姿勢轉換（過渡）由 go / settle 自動補上
+    fn play(self, sc: &mut Sc, seed: u64) {
+        let r = |n: u64, m: u64| ((seed >> n) % m) as f64;
+        match self {
+            Main::Gaze => {
+                sc.say("坐著發呆");
+                sc.settle();
+                sc.hold(4.0 + r(0, 5), Anim::Idle);
+            }
+            Main::Watch => {
+                let f = sc.f;
+                sc.settle();
                 sc.say("轉過來看你");
                 sc.face_you();
-                sc.hold(4.0 + ((seed >> 9) % 4) as f64, Anim::Idle);
+                sc.hold(3.0 + r(0, 4), Anim::Idle);
                 sc.say("坐著發呆");
-                sc.face(1.0);
+                sc.face(if f < 0.0 { -1.0 } else { 1.0 });
             }
-            1 => {
-                let d = 14.0 + ((seed >> 8) % 24) as f64;
-                let dir = if (seed >> 4) & 1 == 0 { 1.0 } else { -1.0 };
-                let mut x = home + dir * d;
-                if x < lo || x > hi {
-                    x = home - dir * d;
-                }
-                let x = x.clamp(lo, hi);
-                sc.say("在散步");
-                sc.walk(x, false);
-                sc.say("坐下來看看");
-                sc.go(P::Sit);
-                sc.hold(2.5, Anim::Idle);
-                sc.say("走回來");
-                sc.walk(home, false);
-                sc.face(1.0);
-                sc.say("坐著發呆");
-                sc.go(P::Sit);
-            }
-            2 => {
-                sc.hold(1.5, Anim::Idle);
+            Main::Groom => {
+                sc.settle();
                 sc.say("在洗臉");
                 sc.go(P::Groom);
-                sc.hold(5.0, Anim::Groom);
+                sc.hold(4.0 + r(0, 3), Anim::Groom);
                 sc.say("洗好臉了");
                 sc.go(P::Sit);
             }
-            3 => {
-                sc.hold(1.5, Anim::Idle);
+            Main::Yawn => {
+                sc.settle();
                 sc.say("打了個呵欠");
                 sc.go(P::Yawn);
                 sc.hold(1.2, Anim::Still);
                 sc.go(P::Sit);
-                sc.say("伸懶腰");
-                sc.go(P::Stretch);
-                sc.hold(1.6, Anim::Still);
-                sc.go(P::Stand);
-                sc.say("坐著發呆");
-                sc.go(P::Sit);
             }
-            4 => {
+            Main::Loaf => {
                 sc.say("趴下來休息");
                 sc.go(P::Loaf);
-                sc.hold(9.0, Anim::Idle);
-                sc.go(P::Sit);
-                sc.say("坐著發呆");
+                sc.hold(8.0 + r(0, 7), Anim::Idle);
             }
-            _ => {}
+            Main::Sniff => {
+                sc.get_up();
+                sc.say("聞聞地上");
+                sc.go(P::Stand);
+                sc.go(P::Eat);
+                sc.hold(2.5 + r(0, 3), Anim::Sniff);
+                sc.go(P::Stand);
+            }
         }
     }
-    if sc.node == P::Sit {
+}
+
+/// 一段閒晃：過渡（有時走到別處）→ 主要行為 → 過渡（回到坐姿）→ 停頓。
+/// 走到別處後就留在那裡，下一段從新位置開始。remain 是離回中間的時間點還有幾秒。
+fn slot(w: f64, s0: f64, from: Start, remain: f64) -> Sc {
+    let home = home(w);
+    let (lo, hi) = bounds(w);
+    let mut sc = Sc::new(from.pose, from.node, from.x, from.f);
+    sc.lim = (lo, hi);
+    let seed = hash(s0.to_bits() ^ 0x5eed);
+    if remain < HOME_LEAD {
+        sc.say("走回中間");
+        sc.walk(home, false);
+        sc.face(1.0);
         sc.say("坐著發呆");
+        sc.settle();
+        sc.fill(remain);
+        return sc;
     }
-    sc.fill(SLOT);
-    (sc, s0)
+    let mut walked = false;
+    if hi - lo >= 12.0 && seed % 100 < 30 {
+        let d = 12.0 + ((seed >> 8) % 30) as f64;
+        let dir = if (seed >> 7) & 1 == 0 { 1.0 } else { -1.0 };
+        let mut x = sc.x + dir * d;
+        if x < lo || x > hi {
+            x = sc.x - dir * d;
+        }
+        let x = x.clamp(lo, hi);
+        if (x - sc.x).abs() >= 6.0 {
+            sc.say("走到別處");
+            sc.walk(x, false);
+            walked = true;
+        }
+    }
+    // 走到新地方常會先聞一聞；聞地板只在走過之後出現
+    let mut main = MAINS[((seed >> 16) % MAINS.len() as u64) as usize];
+    if walked && (seed >> 12).is_multiple_of(3) {
+        main = Main::Sniff;
+    } else if main == Main::Sniff && !walked {
+        main = Main::Gaze;
+    }
+    main.play(&mut sc, seed >> 24);
+    sc.settle();
+    sc.say("坐著發呆");
+    sc.hold(1.5 + ((seed >> 40) % 4) as f64, Anim::Idle);
+    if sc.t > remain {
+        sc.fill(remain);
+    }
+    sc
+}
+
+/// 從 b 開始（狀態 from）一段接一段推算閒晃，回傳 t 所在那一段的劇本和開始時間。
+/// 每個程序快取推算過的段落起點，所以每一格畫面只需要重建一段。
+fn idle(w: f64, b: f64, from: Start, t: f64) -> (Sc, f64) {
+    use std::cell::RefCell;
+    struct Chain {
+        key: (u64, u64, u64, u64),
+        starts: Vec<(f64, Start)>,
+    }
+    thread_local! {
+        static CHAIN: RefCell<Option<Chain>> = const { RefCell::new(None) };
+    }
+    let n = ((b / HOME_EVERY).floor() + 1.0) * HOME_EVERY;
+    let key = (w.to_bits(), b.to_bits(), from.x.to_bits(), from.f.to_bits());
+    CHAIN.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.as_ref().map(|ch| ch.key) != Some(key) {
+            *c = Some(Chain { key, starts: vec![(b, from)] });
+        }
+        let ch = c.as_mut().unwrap();
+        // 往後推算到 t 所在的段落
+        loop {
+            let &(s0, st) = ch.starts.last().unwrap();
+            let sc = slot(w, s0, st, n - s0);
+            let end = s0 + sc.t;
+            if t < end || end >= n - 1e-6 || ch.starts.len() > 100_000 {
+                break;
+            }
+            ch.starts.push((end, Start::end_of(&sc)));
+        }
+        let i = ch.starts.partition_point(|(s0, _)| *s0 <= t).saturating_sub(1);
+        let (s0, st) = ch.starts[i];
+        (slot(w, s0, st, n - s0), s0)
+    })
 }
 
 struct From {
@@ -780,9 +927,18 @@ fn action(act: &str, from: Option<&From>, w: f64) -> Option<Sc> {
     sc.push(0.4, key(node), node, x, fs, Anim::Still, 0.0, false);
     match act {
         "eat" => {
-            let bx = (home + 20.0).min(hi + 11.0).min(w - 5.0);
-            let dir = if bx >= x { 1.0 } else { -1.0 };
-            let tx = (bx - dir * 11.0).clamp(lo, hi);
+            // 碗放在貓面前不遠處（那一側放不下就放另一側），貓走過去吃，吃完留在那裡
+            let place = |dir: f64| {
+                let tx = (x + dir * 8.0).clamp(lo, hi);
+                (tx, tx + dir * 11.0)
+            };
+            let mut dir = fs;
+            let (mut tx, mut bx) = place(dir);
+            if !(5.0..=w - 5.0).contains(&bx) {
+                dir = -dir;
+                (tx, bx) = place(dir);
+            }
+            let bx = bx.clamp(5.0, w - 5.0);
             sc.bowl = Some((bx, tx));
             sc.say("聞到飯香");
             sc.walk(tx, false);
@@ -894,11 +1050,7 @@ fn action(act: &str, from: Option<&From>, w: f64) -> Option<Sc> {
             sc.hold(20.0, Anim::Sleep);
             sc.say("醒來了");
             sc.go(P::Loaf);
-            sc.say("伸懶腰");
-            sc.go(P::Stretch);
-            sc.hold(1.4, Anim::Still);
-            sc.go(P::Stand);
-            sc.go(P::Sit);
+            sc.settle();
         }
         // 等 Claude 等到睡著：一直睡，直到 "wake"
         "doze" => {
@@ -910,11 +1062,7 @@ fn action(act: &str, from: Option<&From>, w: f64) -> Option<Sc> {
         "wake" => {
             sc.say("醒來了");
             sc.go(P::Loaf);
-            sc.say("伸懶腰");
-            sc.go(P::Stretch);
-            sc.hold(1.4, Anim::Still);
-            sc.go(P::Stand);
-            sc.go(P::Sit);
+            sc.settle();
             sc.say("跟你說好了");
             sc.face_you();
             sc.go(P::Meow);
@@ -923,11 +1071,9 @@ fn action(act: &str, from: Option<&From>, w: f64) -> Option<Sc> {
         }
         _ => return None,
     }
-    sc.say("走回原位");
-    sc.walk(home, false);
-    sc.face(1.0);
+    // 做完留在原地坐好（不走回中間）；接下來的閒晃從這裡開始
     sc.say("坐著發呆");
-    sc.go(P::Sit);
+    sc.settle();
     sc.hold(0.5, Anim::Idle);
     Some(sc)
 }
@@ -964,8 +1110,28 @@ pub(crate) struct Now {
     pub(crate) ball: Option<(f64, f64)>, // 球的位置、離地高度
 }
 
+/// 動作是用開始時的寬度 aw 排的；現在的寬度 w 不一樣（換了終端機、重開 Claude、改了大小）就把位置換算過來，
+/// 不然在窄的畫面上貓會停在舊的 x，被切掉一半
+fn fit(x: f64, aw: f64, w: f64) -> f64 {
+    let x = if aw == w {
+        x
+    } else {
+        let (alo, ahi) = bounds(aw);
+        let (lo, hi) = bounds(w);
+        if aw < w || ahi <= alo {
+            x - home(aw) + home(w) // 變寬：照原本離中間的距離放
+        } else {
+            lo + (x - alo) * (hi - lo) / (ahi - alo) // 變窄：等比例縮進新的範圍
+        }
+    };
+    x.clamp(bounds(w).0.min(home(w)), bounds(w).1.max(home(w)))
+}
+
 pub(crate) fn state(pane: &Option<Pane>, t: f64, w: f64) -> Now {
-    let mut anchor = 0.0;
+    // 最近一次回中間的時間點；之後的閒晃從中間開始推算
+    let rk = (t / HOME_EVERY).floor() * HOME_EVERY;
+    let mut b = rk;
+    let mut from = Start::sit(home(w), 1.0);
     if let Some(pn) = pane {
         let aw = if pn.w > 0.0 { pn.w } else { w };
         if let Some(sc) = action(&pn.act, pn.from.as_ref(), aw) {
@@ -973,21 +1139,7 @@ pub(crate) fn state(pane: &Option<Pane>, t: f64, w: f64) -> Now {
             if t < te && t >= pn.t {
                 let tr = t - pn.t;
                 let mut st = sc.eval(tr, t);
-                // 動作是用開始時的寬度 aw 排的；現在的寬度 w 不一樣（換了終端機、重開 Claude）就把位置換算過來，
-                // 不然在窄的畫面上貓會停在舊的 x，被切掉一半
-                let fit = |x: f64| -> f64 {
-                    if aw == w {
-                        return x;
-                    }
-                    let (alo, ahi) = bounds(aw);
-                    let (lo, hi) = bounds(w);
-                    if aw < w || ahi <= alo {
-                        x - home(aw) + home(w) // 變寬：照原本離中間的距離放
-                    } else {
-                        lo + (x - alo) * (hi - lo) / (ahi - alo) // 變窄：等比例縮進新的範圍
-                    }
-                };
-                let place = |x: f64| fit(x).clamp(bounds(w).0.min(home(w)), bounds(w).1.max(home(w)));
+                let place = |x: f64| fit(x, aw, w);
                 st.x = place(st.x);
                 // 碗不另外換算：放在貓吃飯位置換算後的同一個相對距離，否則畫面變窄時兩者距離被壓縮而錯開
                 let bowl = sc.bowl.map(|(bx, tx)| (place(tx) + (bx - tx)).clamp(4.0, w - 4.0)).map(|bx| {
@@ -1003,7 +1155,7 @@ pub(crate) fn state(pane: &Option<Pane>, t: f64, w: f64) -> Now {
                 });
                 let ball = sc.ball.map(|(s, e)| {
                     let u = (tr / 1.6).min(1.0);
-                    let x = fit(lerp(s, e, 1.0 - (1.0 - u) * (1.0 - u))).clamp(4.0, w - 4.0);
+                    let x = fit(lerp(s, e, 1.0 - (1.0 - u) * (1.0 - u)), aw, w).clamp(4.0, w - 4.0);
                     let h = if u < 1.0 {
                         8.0 * (1.0 - u).powf(1.5) * (u * 2.5 * PI).cos().abs()
                     } else {
@@ -1013,12 +1165,16 @@ pub(crate) fn state(pane: &Option<Pane>, t: f64, w: f64) -> Now {
                 });
                 return Now { st, bowl, ball };
             }
-            if t >= te {
-                anchor = te;
+            // 動作做完之後（還沒到下一個回中間的時間點）：閒晃從動作結束的位置接下去
+            if t >= te && te > rk {
+                b = te;
+                let mut end = Start::end_of(&sc);
+                end.x = fit(end.x, aw, w);
+                from = end;
             }
         }
     }
-    let (sc, s0) = idle(w, anchor, t);
+    let (sc, s0) = idle(w, b, from, t);
     Now {
         st: sc.eval(t - s0, t),
         bowl: None,
@@ -2195,6 +2351,94 @@ fn draw_cat3(w: usize, h: usize, k: f64, p: &Pose, cx: f64, f: f64, lift: f64, t
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 連續兩格之間的變化：姿勢、位置、面向都不能突然跳
+    fn jump(a: &St, b: &St) -> f64 {
+        let (pa, pb) = (a.pose.arr(), b.pose.arr());
+        let d = (0..24).map(|i| (pa[i] - pb[i]).abs()).fold(0.0, f64::max);
+        d.max((a.x - b.x).abs() / 1.2).max((a.f - b.f).abs() * 2.0)
+    }
+
+    /// 閒晃跨段落、跨回中間的時間點、動作開始和結束時都不跳格；而且貓會停在不同的地方
+    #[test]
+    fn idle_is_continuous_and_wanders() {
+        let w = 120.0;
+        let base = (1_763_370_000.0 / HOME_EVERY).floor() * HOME_EVERY;
+        let t0 = base + HOME_EVERY - 400.0; // 跨過一個回中間的時間點
+        let mut last: Option<St> = None;
+        let mut rest_x = vec![];
+        let mut t = t0;
+        while t < t0 + 900.0 {
+            let st = state(&None, t, w).st;
+            if let Some(l) = &last {
+                let j = jump(l, &st);
+                assert!(
+                    j < 0.5,
+                    "t={:.2}（距整點 {:+.1} 秒）跳了 {:.2}：{} → {}",
+                    t,
+                    t - (base + HOME_EVERY),
+                    j,
+                    l.cap,
+                    st.cap
+                );
+            }
+            if st.anim == Anim::Idle && st.node == P::Sit {
+                rest_x.push(st.x.round() as i64);
+            }
+            last = Some(st);
+            t += 0.005;
+        }
+        rest_x.sort();
+        rest_x.dedup();
+        assert!(rest_x.len() >= 4, "坐著的位置太少：{:?}", rest_x);
+        // 整點時一定在中間坐好、面向右
+        let st = state(&None, base + HOME_EVERY, w).st;
+        assert_eq!((st.x, st.f, st.node), (home(w), 1.0, P::Sit));
+    }
+
+    #[test]
+    fn action_starts_and_ends_where_the_cat_is() {
+        let w = 120.0;
+        let base = (1_763_370_000.0 / HOME_EVERY).floor() * HOME_EVERY + 600.0;
+        for (n, a) in ["eat", "pet", "play", "call", "jump", "nap", "look", "paw", "wake"].iter().enumerate() {
+            let trig = base + 37.3 * n as f64;
+            let st = state(&None, trig, w).st;
+            let pane = Some(Pane {
+                act: a.to_string(),
+                t: trig,
+                w,
+                from: Some(From {
+                    pose: st.core,
+                    node: st.node,
+                    x: st.x,
+                    f: st.f,
+                }),
+            });
+            let mut last = state(&None, trig - 0.005, w).st;
+            let mut t = trig;
+            while t < trig + 120.0 {
+                let cur = state(&pane, t, w).st;
+                let j = jump(&last, &cur);
+                assert!(j < 0.5, "{} t={:+.2} 跳了 {:.2}：{} → {}", a, t - trig, j, last.cap, cur.cap);
+                last = cur;
+                t += 0.005;
+            }
+        }
+    }
+
+    #[test]
+    fn idle_chain_is_fast() {
+        let w = 120.0;
+        let base = (1_763_370_000.0 / HOME_EVERY).floor() * HOME_EVERY;
+        let started = std::time::Instant::now();
+        // 一小時內每 0.5 秒取一格（從頭推算整條鏈加上逐格重建）
+        let mut t = base;
+        while t < base + HOME_EVERY {
+            let _ = state(&None, t, w);
+            t += 0.5;
+        }
+        assert!(started.elapsed().as_secs_f64() < 2.0, "太慢：{:?}", started.elapsed());
+    }
 
     /// 吃飯時碗要在貓嘴前面：任何倍率、劇本排定時的寬度和畫面寬度不同時都一樣（誤差 1 像素內）
     #[test]

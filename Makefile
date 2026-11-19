@@ -9,11 +9,11 @@ PY     := $(VENV)/bin/python
 CORE   := $(VENV)/bin/neko-core
 
 .DEFAULT_GOAL := help
-.PHONY: help build shell cat install uninstall api test fmt check venv clean
+.PHONY: help build shell cat claude claude-remove install uninstall api test fmt check venv clean
 
 help: ## 列出所有指令
 	@echo "make <指令>"
-	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
 build: $(BIN) ## 編譯 Rust 執行檔（僅在原始碼變更時重新編譯）
 
@@ -25,6 +25,15 @@ shell: $(BIN) $(CORE) ## 啟動 shell，於終端機空白區域顯示貓（exit
 
 cat: $(BIN) $(CORE) ## 全螢幕模式（q 結束）
 	@$(BIN)
+
+claude: $(BIN) $(CORE) ## 將貓外掛安裝到 Claude Code（使用者範圍；直接讀取此 repo 的 mod/）
+	claude plugin marketplace add "$(CURDIR)"
+	claude plugin install neko@termineko
+	@echo "已安裝。已開啟的 Claude Code 執行 /reload-plugins 或重新啟動後生效。"
+
+claude-remove: ## 從 Claude Code 移除貓外掛
+	-claude plugin uninstall neko@termineko
+	-claude plugin marketplace remove termineko
 
 install: $(BIN) $(CORE) ## 安裝至 ~/.local/bin（以 PREFIX=… 指定其他位置）
 	install -Dm755 $(BIN) $(PREFIX)/bin/neko
