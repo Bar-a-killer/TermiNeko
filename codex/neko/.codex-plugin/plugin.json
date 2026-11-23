@@ -1,0 +1,13 @@
+{
+  "name": "neko",
+  "version": "0.2.0",
+  "description": "在 Codex 對話裡照顧終端機裡的那隻貓。",
+  "author": { "name": "The neko authors" },
+  "license": "MIT",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "neko 終端貓",
+    "shortDescription": "看看貓餓不餓，餵牠、摸摸牠，或陪牠玩球。",
+    "defaultPrompt": ["看看 neko 的肚子有多飽"]
+  }
+}

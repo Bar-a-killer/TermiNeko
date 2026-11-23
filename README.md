@@ -8,6 +8,7 @@
 | `neko_api/` | Python | **所有計算和紀錄**：營養模型、心情、體重、紀錄、存檔（`state.json`）、`neko-core` 指令、HTTP API、體重模擬 |
 | `src/` | Rust | **只有畫面和終端機互動**：像素貓動畫、`neko shell`、Claude Code 外掛用的畫面 |
 | `mod/` | TypeScript | Claude Code 外掛：輸入框上方的貓 |
+| `codex/` | Codex 外掛 | 在對話裡查狀態、餵貓、玩球，和終端機共用存檔 |
 
 Rust 不自己算任何營養，都透過 `neko-core` 問 Python。所以終端機、Claude Code、HTTP API 看到的永遠是同一隻貓，所有寫入都經過同一個檔案鎖。
 
@@ -56,6 +57,21 @@ neko shell        # 或 make shell；exit 離開
 | `/neko 摸摸`、`丟球`、`叫牠`、`跳`、`哄睡`、`吃飯` | 讓貓做動作（只有動畫，不影響營養） |
 | `/neko 收起`、`/neko 出來` | 把貓藏起來 / 叫出來 |
 | `/neko 大小 1.5` | 調整解析度（字調小之後可以調大，貓畫得更細） |
+
+### Codex 外掛
+
+在專案根目錄用 Codex CLI 安裝：
+
+```bash
+make build venv
+export NEKO_CORE="$PWD/.venv/bin/neko-core"
+codex plugin marketplace add ./codex
+codex plugin add neko@neko-local
+```
+
+從同一個 shell 開啟新的 Codex 對話，輸入「看看 neko 餓不餓」、「餵 neko 20 克濕食」或「陪 neko 玩球」。也可以在技能選單選 `neko:cat`。外掛會在對話中回報結果，狀態和終端機一樣存在 `~/neko/state.json`（可用 `NEKO_STATE` 指定）。如果想從其他專案使用，在 shell 設定檔裡把 `NEKO_CORE` 設為上述執行檔的絕對路徑。
+
+輸入「貓貓呢」會在對話裡看到貓目前的像素圖。想在打字和等回覆時都看到動畫，在終端機執行 `make codex`（需要 tmux）。Codex 會開在上方，像素貓住在下方十行；離開 Codex 時，貓的窗格會一起關閉。要接回上一個對話可用 `sh codex/neko/bin/neko-codex run resume --last`。
 
 ### 其他
 

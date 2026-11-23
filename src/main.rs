@@ -86,9 +86,15 @@ fn main() {
                 ),
             }
         }
-        "" => {
+        "portrait" => print!("{}", pix::portrait(&pane_path())),
+        "" | "pane" => {
             let name = crate::core::name();
-            if let Err(e) = pix::term(&name, &pane_path().with_file_name("pane-term.json")) {
+            let path = if arg == "pane" {
+                pane_path()
+            } else {
+                pane_path().with_file_name("pane-term.json")
+            };
+            if let Err(e) = pix::term(&name, &path) {
                 eprintln!("neko: {}", e);
                 std::process::exit(1);
             }
@@ -121,6 +127,8 @@ fn main() {
                 "neko                         全螢幕的貓（字越小畫得越細，按 q 離開）\n\
                  neko shell                   開一個 shell，貓住在終端機的空白處（exit 離開）\n\
                  neko line                    印一行狀態（給 tmux 狀態列）\n\
+                 neko portrait                印出 Codex 對話的像素貓\n\
+                 neko pane                    顯示共用動作的像素貓動畫\n\
                  neko feed <dry|wet|treat>    餵食（份量用預設的：乾糧 10 克、濕食 40 克、零食 4 克）\n\
                  \n\
                  給 Claude Code 的 mod 用：\n\

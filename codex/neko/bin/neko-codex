@@ -1,0 +1,41 @@
+#!/bin/sh
+set -eu
+
+# 原始碼與安裝後的外掛都可以從 NEKO_CORE 找到同一份 Rust 執行檔。
+plugin_bin=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+renderer=${NEKO_BIN:-}
+if [ -z "$renderer" ]; then
+    core=${NEKO_CORE:-$PWD/.venv/bin/neko-core}
+    for candidate in "${core%/.venv/bin/neko-core}/target/release/neko" "$plugin_bin/../../../target/release/neko" "$PWD/target/release/neko"; do
+        if [ -x "$candidate" ]; then
+            renderer=$candidate
+            break
+        fi
+    done
+fi
+renderer=${renderer:-neko}
+if ! command -v "$renderer" >/dev/null; then
+    echo '找不到像素貓。請在 neko 專案執行 make build，或設定 NEKO_BIN。' >&2
+    exit 1
+fi
+case ${1:-} in
+    portrait) exec "$renderer" portrait ;;
+    act) shift; exec "$renderer" do "$@" ;;
+    run) shift ;;
+    *) echo '用法：neko-codex run [Codex 參數] | portrait | act <動作>' >&2; exit 2 ;;
+esac
+
+if ! command -v tmux >/dev/null; then
+    echo '常駐動畫需要 tmux。' >&2
+    exit 1
+fi
+if [ -z "${TMUX:-}" ]; then
+    # 專屬 server 繼承目前 shell 的環境；最後一個窗格關閉時一併結束。
+    exec tmux -L "neko-codex-$$" new-session sh "$plugin_bin/neko-codex" run "$@"
+fi
+
+cat_pane=$(tmux split-window -d -v -l 10 -t "$TMUX_PANE" -c "$PWD" -P -F '#{pane_id}' \
+    env "NEKO_STATE=${NEKO_STATE:-$HOME/neko/state.json}" \
+    ${NEKO_CORE:+"NEKO_CORE=$NEKO_CORE"} "$renderer" pane)
+trap 'tmux kill-pane -t "$cat_pane" 2>/dev/null || :' EXIT
+codex "$@"

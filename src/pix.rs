@@ -1558,6 +1558,34 @@ pub(crate) fn world_w(w: usize, k: f64) -> f64 {
     (w as f64 / k).floor().clamp(40.0, 160.0)
 }
 
+/// 在 Codex 對話裡用等寬的色塊呈現目前的姿勢。
+pub fn portrait(pane_path: &Path) -> String {
+    let (w, k) = (48, 0.8);
+    let nw = state(&read_pane(pane_path), now(), world_w(w, k));
+    let st = &nw.st;
+    let cat = draw_cat3(w, (HPX as f64 * k).ceil() as usize, k, &st.pose, st.x, st.f, st.lift, st.twist);
+    let left = cat.ch.iter().enumerate().filter(|(_, c)| **c != ' ').map(|(i, _)| i % w).min().unwrap_or(0);
+    let mut frame = String::new();
+    for row in cat.ch.chunks_exact(w) {
+        if let Some(right) = row.iter().rposition(|&c| c != ' ') {
+            for pixel in &row[left..=right] {
+                frame.push(match pixel {
+                    ' ' => '　',
+                    'k' | 'K' | 'd' | 'D' | 't' | 'm' => '🟫',
+                    'e' | 'M' => '⬛',
+                    'w' | 'W' | 'V' => '⬜',
+                    'n' | 'p' | 'P' => '🟥',
+                    'a' => '🟩',
+                    'l' => '🟨',
+                    _ => '🟧',
+                });
+            }
+            frame.push('\n');
+        }
+    }
+    frame
+}
+
 /// 檢查用：把畫面用字母印出來（每個字母是一個像素）；k 是放大倍率
 pub fn dump(cols: usize, k: f64, pane_path: &Path) -> String {
     let w = cols.clamp(40, 400);

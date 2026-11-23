@@ -9,7 +9,7 @@ PY     := $(VENV)/bin/python
 CORE   := $(VENV)/bin/neko-core
 
 .DEFAULT_GOAL := help
-.PHONY: help build shell cat line install uninstall api test fmt check venv clean
+.PHONY: help build shell cat codex line install uninstall api test fmt check venv clean
 
 help: ## 列出所有指令
 	@echo "make <指令>"
@@ -25,6 +25,9 @@ shell: $(BIN) $(CORE) ## 開一個 shell，貓住在終端機的空白處（exit
 
 cat: $(BIN) $(CORE) ## 全螢幕的貓（q 離開）
 	@$(BIN)
+
+codex: $(BIN) $(CORE) ## 開啟 Codex CLI，輸入框下方常駐像素貓（需要 tmux）
+	@NEKO_BIN="$${NEKO_BIN:-$(abspath $(BIN))}" NEKO_CORE="$${NEKO_CORE:-$(abspath $(CORE))}" sh codex/neko/bin/neko-codex run
 
 line: $(BIN) $(CORE) ## 印一行貓的狀態
 	@$(BIN) line
