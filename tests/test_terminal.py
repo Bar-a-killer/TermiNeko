@@ -8,7 +8,7 @@ import pytest
 
 from neko_terminal.animation import act, read_pane, state
 from neko_terminal.cli import main
-from neko_terminal.shell import Display
+from neko_terminal.shell import SYNC_OFF, SYNC_ON, Display, Overlay
 
 
 @pytest.mark.parametrize(
@@ -63,3 +63,72 @@ def test_shell_buffers_split_sequences_and_restores_primary_screen():
     assert display.screen.display[0].startswith("hello")
     assert not display.blank(0, 0, 5, 1)
     assert display.blank(5, 0, 40, 1)
+
+
+def test_prompt_edits_leave_cat_and_bar_intact():
+    display = Display(80, 23)
+    cat = Overlay()
+    cat.drawn = {(10, 50): (ord("▀"), 0x123456, 0)}
+    # ZLE sends these in separate PTY reads, including split UTF-8 and CSI.
+    parts = [
+        b"neko% ",
+        b"\xe8",
+        b"\xb2\x93",
+        b"\x08",
+        b"\x1b[",
+        b"K",
+        b"\x1b[31m",
+        b"a\x1b[0m",
+        b"\x1b[11;60H\x1b[K",
+        b"\x1b[1;1H\n",
+    ]
+    sent = bytearray()
+    for part in parts:
+        erase, shown = cat.forward(display, part)
+        assert erase == b""
+        assert cat.drawn
+        assert not display.bar_erased
+        sent.extend(shown)
+    assert sent == b"".join(parts)
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        b"\x1b[11;51H ",  # A space overwrites a pixel on a virtually blank cell.
+        b"\x1b[11;51H\x1b[K",  # Erase through the cat.
+        b"\x1b[23;1H\n",  # Scroll a screen with entirely blank underlying rows.
+        b"\x1b[S",  # Explicit scroll.
+        b"\x1b[?1049h",  # Restore the primary surface before entering the alternate one.
+    ],
+)
+def test_output_displacing_the_cat_restores_old_surface(output):
+    display = Display(80, 23)
+    cat = Overlay()
+    cat.drawn = {(10, 50): (ord("▀"), 0x123456, 0)}
+    erase, shown = cat.forward(display, output)
+    assert b"\x1b[11;51H" in erase
+    assert shown == output
+    assert not cat.drawn
+
+
+def test_cursor_restoration_preserves_wide_glyph_at_wrap_boundary():
+    display = Display(8, 4)
+    display.process("123456貓".encode())
+    assert display.screen.cursor.x == 8
+    display.process(display.decorate("\x1b[3;2H!").encode())
+    display.process(b"a")
+    assert display.screen.display[:2] == ["123456貓", "a       "]
+
+
+def test_shell_and_cat_finish_one_synchronized_update():
+    display = Display(80, 23)
+    cat = Overlay()
+    cat.drawn = {(10, 50): (ord("▀"), 0x123456, 0)}
+    assert display.packet(*cat.forward(display, SYNC_ON), "") == SYNC_ON
+    data = b"\x1b[2J"
+    packet = display.packet(*cat.forward(display, data + SYNC_OFF), "▀")
+    assert display.bar_erased
+    assert packet.index(b"\x1b[11;51H") < packet.index(data) < packet.index("▀".encode())
+    assert packet.count(SYNC_OFF) == 1 and packet.endswith(SYNC_OFF)
+    assert display.packet(*cat.forward(display, b"a"), "") == b"a"

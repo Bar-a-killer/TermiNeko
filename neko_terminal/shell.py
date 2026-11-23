@@ -27,9 +27,12 @@ from .scene import scene
 from .terminal import cursor, emit, fit_text, raw_terminal, sgr
 
 WIDTH = 40
+SYNC_ON = b"\x1b[?2026h"
+SYNC_OFF = b"\x1b[?2026l"
 ALT_MODES = {47, 1047, 1049}
 MARGINS = re.compile(r"\x1b\[([\d;]*)r")
 PRIVATE_MODE = re.compile(r"\x1b\[\?([\d;]+)([lh])")
+CELL_EDIT = re.compile(r"\x1b\[\??(\d*)([JKXP@ST])")
 CONTROL = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|[\]PX^_][\s\S]*?(?:\x07|\x1b\\)|[ -/]*[0-~])")
 ANSI_COLORS = {v: k for k, v in {**graphics.FG_ANSI, **graphics.FG_AIXTERM}.items()}
 
@@ -74,6 +77,10 @@ class Display:
         self.stream = pyte.Stream(self.screen)
         self.decoder = codecs.getincrementaldecoder("utf-8")("surrogateescape")
         self.pending = ""
+        self.erased_ranges = []
+        self.bar_erased = False
+        self.synchronized = False
+        self.end_sync = False
         self.heat = [0.0] * cols
         self.occupied = []
         self.index()
@@ -101,6 +108,8 @@ class Display:
             self.occupied.append(mask)
 
     def process(self, data):
+        self.erased_ranges.clear()
+        self.bar_erased = False
         text = self.pending + self.decoder.decode(data)
         self.pending = ""
         output = []
@@ -120,11 +129,14 @@ class Display:
                 break
             token = match[0]
             start = match.end()
-            if toggle := PRIVATE_MODE.fullmatch(token):
+            toggle = PRIVATE_MODE.fullmatch(token)
+            if toggle:
                 params = {int(p) for p in toggle[1].split(";") if p}
                 if params & ALT_MODES:
                     enable = toggle[2] == "h"
                     if enable != self.alternate:
+                        self.bar_erased = True
+                        self.erased_ranges.append(((0, 0), (self.screen.lines, 0)))
                         self.screen = pyte.Screen(self.primary.columns, self.primary.lines) if enable else self.primary
                         self.stream = pyte.Stream(self.screen)
             if margin := MARGINS.fullmatch(token):
@@ -132,7 +144,14 @@ class Display:
                 top = int(vals[0] or 1) or 1
                 bottom = int(vals[1] or 0) if len(vals) > 1 else 0
                 token = f"\x1b[{top};{min(bottom or self.screen.lines, self.screen.lines)}r"
-            self.stream.feed(token)
+            self.apply_control(token)
+            if toggle and 2026 in params:
+                self.synchronized = toggle[2] == "h"
+                self.end_sync = not self.synchronized
+                if self.end_sync:
+                    # Commit the application's update after any replacement pixels.
+                    remaining = [p for p in toggle[1].split(";") if p and int(p) != 2026]
+                    token = "\x1b[?" + ";".join(remaining) + "l" if remaining else ""
             output.append(token)
             if token == "\x1bc":
                 output.append(f"\x1b[1;{self.screen.lines}r")
@@ -141,6 +160,35 @@ class Display:
             used = sum((row >> col) & 1 for row in self.occupied)
             self.heat[col] = h * 0.97 + 0.03 * used / self.screen.lines
         return "".join(output).encode("utf-8", "surrogateescape")
+
+    def apply_control(self, token):
+        """Track physical edits that can leave blank virtual cells looking unchanged."""
+        scr = self.screen
+        if edit := CELL_EDIT.fullmatch(token):
+            count, op = int(edit[1] or 0), edit[2]
+            y, x = scr.cursor.y, scr.cursor.x
+            first, last = (y, x), (y, scr.columns)
+            if op in "JK":
+                if count in (1, 2, 3):
+                    first = (0 if op == "J" else y, 0)
+                last = (y, x) if count == 1 else (scr.lines if op == "J" else y, scr.columns)
+                self.bar_erased |= op == "J" and count in (0, 2, 3)
+            elif op == "X":
+                last = (y, x + (count or 1) - 1)
+            elif op in "ST":
+                # pyte implements IND/RI but has no CSI scroll-up/down dispatch.
+                top, bottom = scr.margins or (0, scr.lines - 1)
+                scr.cursor.y = bottom if op == "S" else top
+                scroll = scr.index if op == "S" else scr.reverse_index
+                for _ in range(min(bottom - top + 1, count or 1)):
+                    scroll()
+                scr.cursor.y = y
+                return
+            self.erased_ranges.append((first, last))
+        elif token == "\x1bc":
+            self.bar_erased = True
+            self.erased_ranges.append(((0, 0), (scr.lines, 0)))
+        self.stream.feed(token)
 
     def blank(self, x, y, w, h):
         if x < 0 or y < 0 or x + w > self.screen.columns or y + h > self.screen.lines:
@@ -162,23 +210,41 @@ class Display:
         options.sort(reverse=True)
         return options
 
+    def cursor_guard(self):
+        """Controls for drawing on the physical terminal around the shell cursor."""
+        scr = self.screen
+        origin = modes.DECOM in scr.mode
+        row = scr.cursor.y - (scr.margins.top if origin and scr.margins else 0)
+        col = scr.cursor.x
+        if col == scr.columns:
+            # CUP alone loses the delayed autowrap at the right margin. Replay
+            # the last glyph so the shell's next character still wraps.
+            col -= 1
+            if not scr.buffer[scr.cursor.y][col].data and col:
+                col -= 1
+            char = scr.buffer[scr.cursor.y][col]
+            restore = cursor(row, col) + attributes(char) + (char.data or " ")
+        else:
+            restore = cursor(row, col)
+        before = "\x1b[?25l" + ("\x1b[?6l" if origin else "")
+        after = ("\x1b[?6h" if origin else "") + restore + attributes(scr.cursor.attrs)
+        return before, after + ("" if scr.cursor.hidden else "\x1b[?25h")
+
     def decorate(self, text):
         if not text:
             return ""
-        scr = self.screen
-        # CUP uses margin-relative rows in origin mode. Switch back before restoring the cursor.
-        origin = modes.DECOM in scr.mode
-        row = scr.cursor.y - (scr.margins.top if origin and scr.margins else 0)
-        restore = cursor(row, min(scr.columns - 1, scr.cursor.x)) + attributes(scr.cursor.attrs)
-        return (
-            "\x1b[?2026h\x1b[?25l"
-            + ("\x1b[?6l" if origin else "")
-            + text
-            + ("\x1b[?6h" if origin else "")
-            + restore
-            + ("" if scr.cursor.hidden else "\x1b[?25h")
-            + "\x1b[?2026l"
-        )
+        before, after = self.cursor_guard()
+        return before + text + after
+
+    def packet(self, erased, shown, update):
+        """Present the shell bytes and any overlay changes in a single write."""
+        if erased or update:
+            shown = SYNC_ON + erased + shown + self.decorate(update).encode()
+            self.end_sync = not self.synchronized
+        if self.end_sync:
+            shown += SYNC_OFF
+            self.end_sync = False
+        return shown
 
 
 class Overlay:
@@ -205,6 +271,28 @@ class Overlay:
             output.append(chr(ch))
         self.drawn = want
         return "".join(output)
+
+    def forward(self, display, data):
+        """Return the old surface restoration (if needed) and the completed shell output."""
+        if not self.drawn:
+            return b"", display.process(data)
+        old = display.screen
+        before, after = display.cursor_guard()
+        rows = {r: old.buffer[r] for r, _ in self.drawn}
+        cells = {(r, c): rows[r][c] for r, c in self.drawn}
+        shown = display.process(data)
+        new = display.screen
+        # A scroll moves row objects even if every underlying cell was blank.
+        moved = old is not new or any(line is not new.buffer[r] for r, line in rows.items())
+        overwritten = any(new.buffer[r][c] is not char for (r, c), char in cells.items())
+        cleared = any(first <= pos <= last for first, last in display.erased_ranges for pos in cells)
+        if not (moved or overwritten or cleared):
+            return b"", shown
+        erase = "".join(cursor(r, c) + attributes(char) + (char.data or " ") for (r, c), char in cells.items())
+        self.drawn.clear()
+        if moved:
+            self.pos = self.travel = None
+        return (before + erase + after).encode(), shown
 
     def move(self, display, dest, frame, k, h):
         start = self.pos
@@ -276,7 +364,7 @@ class Overlay:
 
     def frame(self, display, path, t):
         scr = display.screen
-        if display.alternate or scr.columns < WIDTH or scr.cursor.x >= scr.columns:
+        if display.alternate or scr.columns < WIDTH:
             self.pos = self.travel = None
             return self.paint({}, display)
         k = fit_scale(WIDTH, clamp(scr.lines / 33, 0.4, 1))
@@ -376,6 +464,7 @@ def session(pid, master, cols, rows, name, path):
                             send.append(b)
                     while send:
                         del send[: os.write(master, send)]
+                erased = shown = b""
                 if master in ready:
                     try:
                         data = os.read(master, 65536)
@@ -385,26 +474,12 @@ def session(pid, master, cols, rows, name, path):
                         break
                     if not data:
                         break
-                    # Plain text cannot scroll until it reaches the right margin. Leave
-                    # the overlay alone when typing elsewhere on the same line.
-                    scr = display.screen
-                    printable = data.isascii() and all(32 <= b < 127 for b in data)
-                    untouched = (
-                        printable
-                        and scr.cursor.x + len(data) < scr.columns
-                        and not any(
-                            (scr.cursor.y, c) in cat.drawn for c in range(scr.cursor.x, scr.cursor.x + len(data))
-                        )
-                    )
-                    erased = "" if untouched else display.decorate(cat.paint({}, display))
-                    shown = display.process(data)
-                    sys.stdout.buffer.write(erased.encode() + shown)
-                    sys.stdout.buffer.flush()
-                    if len(data) >= 4096:
+                    erased, shown = cat.forward(display, data)
+                    if len(shown) >= 4096:
                         next_frame = t + 0.15
                     elif erased:
                         next_frame = t
-                    if b"\x1b" in data:
+                    if display.bar_erased:
                         last_bar = None
                 if t >= next_fg:
                     next_fg = t + 0.5
@@ -427,8 +502,6 @@ def session(pid, master, cols, rows, name, path):
                         message = str(exc)
                     pending_feed = None
                     until = t + 4
-                if display.pending or display.decoder.getstate()[0] or display.screen.cursor.x >= cols:
-                    continue
                 update = ""
                 if t >= next_frame:
                     next_frame = t + 0.08
@@ -437,8 +510,10 @@ def session(pid, master, cols, rows, name, path):
                 if text != last_bar:
                     update += cursor(rows - 1, 0) + "\x1b[0;48;5;236;38;5;250m\x1b[2K" + fit_text(" " + text, cols - 1)
                     last_bar = text
-                if update:
-                    emit(display.decorate(update))
+                packet = display.packet(erased, shown, update)
+                if packet:
+                    sys.stdout.buffer.write(packet)
+                    sys.stdout.buffer.flush()
         finally:
             if dozing:
                 act("wake", WIDTH, 1, name, path)
