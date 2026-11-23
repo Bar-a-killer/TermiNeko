@@ -6,21 +6,21 @@
 | 部分 | 語言 | 做什麼 |
 |---|---|---|
 | `neko_api/` | Python | **所有計算和紀錄**：營養模型、心情、體重、紀錄、存檔（`state.json`）、`neko-core` 指令、HTTP API、體重模擬 |
-| `src/` | Rust | **只有畫面和終端機互動**：像素貓動畫、`neko shell`、Claude Code 外掛用的畫面 |
+| `neko_terminal/` | Python | **畫面和終端機互動**：像素貓動畫、`neko shell`、Claude Code 外掛用的畫面 |
 | `mod/` | TypeScript | Claude Code 外掛：輸入框上方的貓 |
 | `codex/` | Codex 外掛 | 在對話裡查狀態、餵貓、玩球，和終端機共用存檔 |
 
-Rust 不自己算任何營養，都透過 `neko-core` 問 Python。所以終端機、Claude Code、HTTP API 看到的永遠是同一隻貓，所有寫入都經過同一個檔案鎖。
+終端機直接使用 `neko_api` 的營養模型和存檔鎖，Claude Code、Codex 和 HTTP API 共用同一隻貓。像素動畫使用 NumPy 和 Numba，第一次繪圖時會編譯數值運算並快取。
 
 ---
 
 ## 快速開始
 
-需要 [Rust](https://rustup.rs/) 和 Python 3.10 以上（有 [uv](https://github.com/astral-sh/uv) 會自動用它）。
+需要 Python 3.10 以上（有 [uv](https://github.com/astral-sh/uv) 會自動用它）。
 
 ```bash
 make            # 列出所有指令
-make shell      # 開一個 shell，貓住在終端機的空白處（第一次會自動編譯、建 .venv）
+make shell      # 開一個 shell，貓住在終端機的空白處（第一次會自動建立 .venv 並安裝依賴）
 make install    # 裝到 ~/.local/bin，之後在哪裡都能直接打 neko shell
 ```
 
@@ -49,7 +49,7 @@ neko shell        # 或 make shell；exit 離開
 1. `make build`
 2. 把 `mod/` 加進 Claude Code 的外掛資料夾，例如設定 `CLAUDE_CODE_PLUGIN_DIRS=<repo>/mod`
 
-外掛會執行 `<repo>/target/release/neko`；放在別的地方的話設定 `NEKO_BIN`。
+外掛會執行 `<repo>/.venv/bin/neko`；放在別的地方的話設定 `NEKO_BIN`。
 
 | 指令 | 做什麼 |
 |---|---|
@@ -187,16 +187,16 @@ points = simulate(start_w=4.0, daily_kcal=260, days=180)
 
 ```bash
 make test       # Python 測試
-make fmt        # 整理格式（rustfmt、ruff）
-make check      # 全部檢查一次：格式、clippy、ruff、測試、外掛驗證
+make fmt        # 整理格式（ruff）
+make check      # 全部檢查一次：格式、ruff、測試、外掛驗證
 make clean      # 刪掉編譯產物和快取
 ```
 
 | 環境變數 | 用途 |
 |---|---|
 | `NEKO_STATE` | 存檔位置（預設 `~/neko/state.json`；`pane.json` 等動畫狀態放在同一個資料夾） |
-| `NEKO_CORE` | `neko-core` 在哪（預設依序找這個 repo 的 `.venv/bin/neko-core`、`PATH`） |
-| `NEKO_BIN` | Claude Code 外掛用的 `neko` 執行檔（預設 `<repo>/target/release/neko`） |
+| `NEKO_CORE` | `neko-core` 指令的覆寫路徑。終端機預設直接呼叫 Python 核心 |
+| `NEKO_BIN` | Claude Code 外掛用的 `neko` 執行檔（預設 `<repo>/.venv/bin/neko`） |
 | `NEKO_LOG` | neko shell 把貓換位置的原因寫到這個檔案（除錯用） |
 
 ### 專案結構
@@ -209,15 +209,18 @@ make clean      # 刪掉編譯產物和快取
 │   ├── core.py          每個操作（餵食、摸摸、改名…）和狀態格式
 │   ├── cli.py           neko-core 指令
 │   └── server.py        FastAPI 路由
-├── src/                 Rust：只有畫面和終端機互動
-│   ├── main.rs          指令列
-│   ├── core.rs          呼叫 neko-core
-│   ├── pix.rs           像素畫的貓：姿勢、動作劇本、畫圖、全螢幕版
-│   └── shell.rs         neko shell：pty、找空白處、讓位、狀態列
+├── neko_terminal/       Python 終端機與動畫
+│   ├── cli.py           neko 指令、Claude Code 的動畫串流
+│   ├── animation.py     動作劇本與共用的 pane.json
+│   ├── poses.py         骨架與步態
+│   ├── geometry.py      立體模型
+│   ├── render.py        光線步進與像素著色
+│   ├── scene.py         組合畫面、輸出 Raster 格子
+│   ├── terminal.py      全螢幕與 tmux 窗格
+│   └── shell.py         neko shell：pty、找空白處、讓位、狀態列
 ├── mod/                 Claude Code 外掛（hooks/register.tsx）
 ├── tests/               pytest
 ├── Makefile
-├── Cargo.toml
 └── pyproject.toml
 ```
 

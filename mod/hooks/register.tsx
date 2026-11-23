@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Hook, Register } from 'claude-code'
 
-// neko 執行檔：有設 NEKO_BIN 就用它，不然用這個 repo 編出來的（mod/ 的上一層 target/release/neko）
+// neko 執行檔：有設 NEKO_BIN 就用它，不然用這個 repo 的 Python 環境
 let bin: string | undefined
 async function nekoBin($: Engine): Promise<string> {
   if (bin) {
@@ -13,7 +13,7 @@ async function nekoBin($: Engine): Promise<string> {
   }
   const { CLAUDE_PLUGIN_ROOT: root = '' } = await $.process.hookEnv()
   const repo = root.replace(/\/+$/, '').replace(/\/[^/]+$/, '')
-  return (bin = `${repo}/target/release/neko`)
+  return (bin = `${repo}/.venv/bin/neko`)
 }
 const ACTS = ['eat', 'pet', 'play', 'call', 'jump', 'nap']
 // 中文也能用：/neko 摸摸
@@ -372,10 +372,10 @@ export const register: Register = on => {
       return next(e)
     }
     const { Box, Raster, Text } = $.ui.resolve(e)
-    const [size = '', rustCaption = '', cells = ''] = text.split('\n')
+    const [size = '', catCaption = '', cells = ''] = text.split('\n')
     const doing = await read($, activity)
     // 「名字 行為<Tab>營養狀態」：Claude 在做事時行為換成那件事，營養狀態接在後面
-    const [behavior = '', nutrition = ''] = rustCaption.split('\t')
+    const [behavior = '', nutrition = ''] = catCaption.split('\t')
     const said = doing === '' ? behavior : `${behavior.split(' ')[0]} ${doing}`
     const caption = nutrition === '' ? said : `${said}  ${nutrition}`
     const [columns = 0, rows = 0] = size.split(' ').map(Number)

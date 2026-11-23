@@ -1,4 +1,4 @@
-"""neko-core：終端機版（Rust）和 Claude Code 外掛用來問貓、對貓做事的指令。
+"""neko-core：終端機版和 Claude Code 外掛用來問貓、對貓做事的指令。
 
     neko-core status                 貓現在的狀態（JSON）
     neko-core line                   一行狀態（純文字，給 tmux 狀態列）

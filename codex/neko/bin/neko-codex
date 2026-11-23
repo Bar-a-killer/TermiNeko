@@ -1,12 +1,12 @@
 #!/bin/sh
 set -eu
 
-# 原始碼與安裝後的外掛都可以從 NEKO_CORE 找到同一份 Rust 執行檔。
+# 原始碼與安裝後的外掛都可以從 NEKO_CORE 找到同一份 Python 執行檔。
 plugin_bin=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 renderer=${NEKO_BIN:-}
 if [ -z "$renderer" ]; then
     core=${NEKO_CORE:-$PWD/.venv/bin/neko-core}
-    for candidate in "${core%/.venv/bin/neko-core}/target/release/neko" "$plugin_bin/../../../target/release/neko" "$PWD/target/release/neko"; do
+    for candidate in "${core%/*}/neko" "$plugin_bin/../../../.venv/bin/neko" "$PWD/.venv/bin/neko"; do
         if [ -x "$candidate" ]; then
             renderer=$candidate
             break
